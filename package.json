@@ -1,44 +1,11 @@
-export default async function handler(req, res) {
-  const { product, busdate, productdate, filtertype, contracttype } = req.query;
-
-  if (!product || !busdate || !filtertype) {
-    return res.status(400).json({
-      error: "Brakuje parametrów: product, busdate, filtertype",
-    });
-  }
-
-  const url = new URL(`https://www.eurex.com/api/v1/overallstatistics/${product}`);
-  url.searchParams.set("busdate", String(busdate));
-  url.searchParams.set("filtertype", String(filtertype));
-
-  if (productdate) {
-    url.searchParams.set("productdate", String(productdate));
-  }
-
-  if (contracttype) {
-    url.searchParams.set("contracttype", String(contracttype));
-  }
-
-  try {
-    const response = await fetch(url.toString(), {
-      headers: {
-        Accept: "application/json",
-        "User-Agent": "Mozilla/5.0",
-      },
-    });
-
-    const text = await response.text();
-
-    try {
-      const data = JSON.parse(text);
-      return res.status(response.status).json(data);
-    } catch {
-      return res.status(response.status).send(text);
-    }
-  } catch (error) {
-    return res.status(500).json({
-      error: "Błąd przy pobieraniu danych z Eurex",
-      details: error.message,
-    });
+{
+  "name": "0dte-calculator",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "echo 'Static app for Vercel'"
+  },
+  "engines": {
+    "node": "18.x"
   }
 }
