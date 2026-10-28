@@ -66,12 +66,10 @@ const percentFormat = new Intl.NumberFormat('en-US', { style: 'percent', maximum
 const WALL_TOLERANCE = 0.04;
 const CONFLUENCE_TOLERANCE_PCT = 0.5;
 const instruments = [
-  { symbol: 'SPY', label: 'SPY', cfdSymbol: 'US500', futuresSymbol: 'ES=F', option: 'SPY · S&P 500 ETF', description: 'SPDR S&P 500 ETF Trust' },
-  { symbol: 'QQQ', label: 'QQQ', cfdSymbol: 'US100', futuresSymbol: 'NQ=F', option: 'QQQ · Nasdaq-100 ETF', description: 'Invesco QQQ Trust · Nasdaq-100 ETF' },
-  { symbol: '^NDX', label: 'NDX', cfdSymbol: 'US100', futuresSymbol: 'NQ=F', option: 'NDX · Nasdaq-100 Index', description: 'Nasdaq-100 index options' },
-  { symbol: '^SPX', label: 'SPX', cfdSymbol: 'US500', futuresSymbol: 'ES=F', option: 'SPX · S&P 500 Index', description: 'S&P 500 index options' },
-  { symbol: 'DIA', label: 'DIA', cfdSymbol: 'US30', futuresSymbol: 'YM=F', option: 'DIA · Dow ETF / US30', description: 'SPDR Dow Jones Industrial Average ETF Trust · US30 proxy' },
-  { symbol: 'GLD', label: 'GLD', cfdSymbol: 'XAUUSD', futuresSymbol: 'GC=F', option: 'GLD · Gold ETF / XAUUSD', description: 'SPDR Gold Shares · XAUUSD proxy' },
+  { symbol: '^NDX', label: 'NDX', exchange: 'NASDAQ', cfdSymbol: 'US100', futuresSymbol: 'NQ=F', option: 'NDX · US100 · QQQ confirm', description: 'Nasdaq-100 index options · QQQ confluence' },
+  { symbol: 'SPY', label: 'SPY', exchange: 'NYSE ARCA', cfdSymbol: 'US500', futuresSymbol: 'ES=F', option: 'SPY · US500 · SPX confirm', description: 'S&P 500 ETF options · SPX confluence' },
+  { symbol: 'DIA', label: 'DIA', exchange: 'NYSE ARCA', cfdSymbol: 'US30', futuresSymbol: 'YM=F', option: 'DIA · US30', description: 'SPDR Dow Jones Industrial Average ETF Trust · US30' },
+  { symbol: 'GLD', label: 'GLD', exchange: 'NYSE ARCA', cfdSymbol: 'XAUUSD', futuresSymbol: 'GC=F', option: 'GLD · XAUUSD', description: 'SPDR Gold Shares · XAUUSD proxy' },
 ];
 
 function display(value: number | null | undefined, digits = 2) {
@@ -197,8 +195,8 @@ function PriceChart({
 }
 
 export default function App() {
-  const [symbol, setSymbol] = useState('QQQ');
-  const [cfdPreviousHighs, setCfdPreviousHighs] = useState<Record<string, string>>({ US100: '', US500: '', US30: '' });
+  const [symbol, setSymbol] = useState('^NDX');
+  const [cfdPreviousHighs, setCfdPreviousHighs] = useState<Record<string, string>>({ US100: '', US500: '', US30: '', XAUUSD: '' });
   const [chain, setChain] = useState<Chain | null>(null);
   const [expiration, setExpiration] = useState(todayExpiration());
   const [loading, setLoading] = useState(true);
@@ -241,7 +239,7 @@ export default function App() {
   }
 
   useEffect(() => {
-    void loadChain('QQQ', todayExpiration(), false);
+    void loadChain('^NDX', todayExpiration(), false);
   }, []);
 
   useEffect(() => {
@@ -403,7 +401,7 @@ export default function App() {
           <div className="eyebrow">OPTION CHAIN <span className="eyebrow-line" /></div>
           <div className="title-row">
             <h1>{activeInstrument?.label ?? symbol}</h1>
-            <span className="exchange-tag">NASDAQ</span>
+            <span className="exchange-tag">{activeInstrument?.exchange ?? 'US EQUITY'}</span>
             {price !== null && price !== undefined && <span className="price">${display(price)}</span>}
             {chain?.quote.changePercent !== null && chain?.quote.changePercent !== undefined && (
               <span className={`price-change ${changePositive ? 'positive' : 'negative'}`}>
