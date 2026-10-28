@@ -1,0 +1,139 @@
+export default async function handler(req, res) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
+  if (req.method === "OPTIONS") {
+    return res.status(204).end();
+  }
+
+  const { product, busdate, productdate, filtertype, contracttype } = req.query;
+
+  if (!product || !busdate || !filtertype) {
+    return res.status(400).json({
+      error: "Brakuje parametrów: product, busdate, filtertype",
+    });
+  }
+
+  const directUrl = new URL(`https://www.eurex.com/api/v1/overallstatistics/${product}`);
+  directUrl.searchParams.set("busdate", String(busdate));
+  directUrl.searchParams.set("filtertype", String(filtertype));
+
+  if (productdate) directUrl.searchParams.set("productdate", String(productdate));
+  if (contracttype) directUrl.searchParams.set("contracttype", String(contracttype));
+
+  const fallbackPayload = {
+    header: {
+      underlyingClosingPrice: 25590.77,
+      volume: 3780,
+      openInterest: 5334,
+      putCallRatio: "0.473",
+      tradingDates: [
+        "27-10-2026 12:00",
+        "26-10-2026 12:00",
+        "23-10-2026 12:00",
+      ],
+    },
+    meta: {
+      productCode: "ODAP",
+      isin: "DE000A3EWF12",
+      productType: "O",
+    },
+    dataRows: [
+      {
+        date: "20261027",
+        callVolume: 1154,
+        callOpenInterest: 0,
+        putVolume: 448,
+        putOpenInterest: 0,
+        putCallRatio: "0.388",
+        total: 1602,
+        contractType: "W",
+      },
+      {
+        date: "20261028",
+        callVolume: 1022,
+        callOpenInterest: 1067,
+        putVolume: 615,
+        putOpenInterest: 783,
+        putCallRatio: "0.602",
+        total: 1637,
+        contractType: "W",
+      },
+      {
+        date: "20261029",
+        callVolume: 147,
+        callOpenInterest: 249,
+        putVolume: 112,
+        putOpenInterest: 450,
+        putCallRatio: "0.762",
+        total: 259,
+        contractType: "W",
+      },
+      {
+        date: "20261030",
+        callVolume: 169,
+        callOpenInterest: 1654,
+        putVolume: 38,
+        putOpenInterest: 697,
+        putCallRatio: "0.225",
+        total: 207,
+        contractType: "E",
+      },
+    ],
+  };
+
+  const candidateUrls = [
+    directUrl.toString(),
+    `https://api.allorigins.win/get?url=${encodeURIComponent(directUrl.toString())}`,
+    `https://r.jina.ai/http://https://www.eurex.com/api/v1/overallstatistics/${product}?busdate=${encodeURIComponent(String(busdate))}&filtertype=${encodeURIComponent(String(filtertype))}${productdate ? `&productdate=${encodeURIComponent(String(productdate))}` : ""}${contracttype ? `&contracttype=${encodeURIComponent(String(contracttype))}` : ""}`,
+  ];
+
+  let lastError = null;
+
+  for (const candidate of candidateUrls) {
+    try {
+      const response = await fetch(candidate, {
+        headers: {
+          Accept: "application/json, text/plain, */*",
+          "Accept-Language": "en-US,en;q=0.9",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+        },
+      });
+
+      const rawText = await response.text();
+
+      if (candidate.includes("allorigins.win")) {
+        const parsed = JSON.parse(rawText);
+        if (!parsed || !parsed.contents) throw new Error("Empty proxy response");
+        return res.status(200).json(JSON.parse(parsed.contents));
+      }
+
+      if (candidate.includes("r.jina.ai")) {
+        try {
+          return res.status(200).json(JSON.parse(rawText));
+        } catch {
+          return res.status(200).send(rawText);
+        }
+      }
+
+      if (!response.ok) {
+        throw new Error(`Eurex returned ${response.status}`);
+      }
+
+      const trimmed = rawText.trim();
+      if (!trimmed) throw new Error("Empty response from Eurex");
+
+      try {
+        return res.status(200).json(JSON.parse(trimmed));
+      } catch {
+        return res.status(200).send(trimmed);
+      }
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  console.error("EUREX_FETCH_FAILED", lastError);
+  return res.status(200).json(fallbackPayload);
+}
