@@ -116,49 +116,16 @@ function renderDetail(rows) {
   });
 }
 
-async function fetchJsonWithFallback(url) {
-  const candidates = [
-    url,
-    `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
-  ];
+async function fetchEurex(params) {
+  const query = new URLSearchParams(params).toString();
+  const response = await fetch(`/api/eurex?${query}`);
 
-  let lastError = null;
-
-  for (const candidate of candidates) {
-    try {
-      const response = await fetch(candidate, {
-        headers: {
-          Accept: "application/json",
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      const text = await response.text();
-
-      if (candidate.includes("allorigins.win")) {
-        const parsed = JSON.parse(text);
-        if (!parsed || !parsed.contents) {
-          throw new Error("Empty proxy response");
-        }
-
-        const data = JSON.parse(parsed.contents);
-        return data;
-      }
-
-      try {
-        return JSON.parse(text);
-      } catch {
-        return text;
-      }
-    } catch (error) {
-      lastError = error;
-    }
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`HTTP ${response.status}: ${text || "request failed"}`);
   }
 
-  throw lastError || new Error("Nie udało się pobrać danych z Eurex.");
+  return response.json();
 }
 
 async function loadOverview() {
@@ -167,12 +134,14 @@ async function loadOverview() {
     const busdate = busdateInput.value;
     const apiDate = formatDateForApi(new Date(`${busdate}T00:00:00`));
 
-    const url =
-      `https://www.eurex.com/api/v1/overallstatistics/${productId}` +
-      `?busdate=${apiDate}&filtertype=overview`;
-
     statusEl.textContent = "Pobieram overview...";
-    const data = await fetchJsonWithFallback(url);
+
+    const data = await fetchEurex({
+      product: productId,
+      busdate: apiDate,
+      filtertype: "overview",
+    });
+
     const rows = normalizeRows(data);
     renderOverview(rows);
     statusEl.textContent = `Overview OK — ${rows.length} rekordów`;
@@ -192,12 +161,15 @@ async function loadStrikeChain(productDate, contractType) {
 
     let rows = [];
     for (const type of [contractType, ...CONTRACT_TYPES.filter((t) => t !== contractType)]) {
-      const url =
-        `https://www.eurex.com/api/v1/overallstatistics/${productId}` +
-        `?filtertype=detail&productdate=${productDate}&busdate=${apiBusDate}&contracttype=${type}`;
-
       try {
-        const data = await fetchJsonWithFallback(url);
+        const data = await fetchEurex({
+          product: productId,
+          busdate: apiBusDate,
+          filtertype: "detail",
+          productdate: productDate,
+          contracttype: type,
+        });
+
         const candidate = normalizeRows(data);
         if (candidate.length) {
           rows = candidate;
@@ -206,7 +178,7 @@ async function loadStrikeChain(productDate, contractType) {
           return;
         }
       } catch (error) {
-        // kontynuujemy do kolejnego typu kontraktu
+        // próbujemy kolejny typ kontraktu
       }
     }
 
