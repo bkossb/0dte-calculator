@@ -22,19 +22,23 @@ type ChartLevel = { price: number; color: string; title: string };
 
 type Chain = {
   symbol: string;
+  cfdSymbol: string;
+  futuresSymbol: string;
+  referenceSymbol: string;
   quote: { price: number | null; previousClose: number | null; changePercent: number | null; currency: string };
   expirations: number[];
   selectedExpiration: number | null;
   calls: Contract[];
   puts: Contract[];
+  optionsError: string | null;
   history: HistoryPoint[];
   overnightHistory: HistoryPoint[];
   chartError: string | null;
   overnightError: string | null;
   previousDayHigh: number | null;
   previousDayDate: string | null;
-  qqqPreviousDayHigh: number | null;
-  qqqPreviousDayDate: string | null;
+  referencePreviousDayHigh: number | null;
+  referencePreviousDayDate: string | null;
   futuresPreviousDayHigh: number | null;
   futuresPreviousDayDate: string | null;
   fetchedAt: string;
@@ -45,11 +49,11 @@ const compactFormat = new Intl.NumberFormat('en-US', { notation: 'compact', maxi
 const percentFormat = new Intl.NumberFormat('en-US', { style: 'percent', maximumFractionDigits: 1 });
 const WALL_TOLERANCE = 0.04;
 const instruments = [
-  { symbol: 'SPY', label: 'SPY', option: 'SPY · S&P 500 ETF', description: 'SPDR S&P 500 ETF Trust' },
-  { symbol: 'QQQ', label: 'QQQ', option: 'QQQ · Nasdaq-100 ETF', description: 'Invesco QQQ Trust · Nasdaq-100 ETF' },
-  { symbol: '^NDX', label: 'NDX', option: 'NDX · Nasdaq-100 Index', description: 'Nasdaq-100 index options' },
-  { symbol: '^SPX', label: 'SPX', option: 'SPX · S&P 500 Index', description: 'S&P 500 index options' },
-  { symbol: 'DIA', label: 'DIA', option: 'DIA · Dow ETF / US30', description: 'SPDR Dow Jones Industrial Average ETF Trust · US30 proxy' },
+  { symbol: 'SPY', label: 'SPY', cfdSymbol: 'US500', futuresSymbol: 'ES=F', option: 'SPY · S&P 500 ETF', description: 'SPDR S&P 500 ETF Trust' },
+  { symbol: 'QQQ', label: 'QQQ', cfdSymbol: 'US100', futuresSymbol: 'NQ=F', option: 'QQQ · Nasdaq-100 ETF', description: 'Invesco QQQ Trust · Nasdaq-100 ETF' },
+  { symbol: '^NDX', label: 'NDX', cfdSymbol: 'US100', futuresSymbol: 'NQ=F', option: 'NDX · Nasdaq-100 Index', description: 'Nasdaq-100 index options' },
+  { symbol: '^SPX', label: 'SPX', cfdSymbol: 'US500', futuresSymbol: 'ES=F', option: 'SPX · S&P 500 Index', description: 'S&P 500 index options' },
+  { symbol: 'DIA', label: 'DIA', cfdSymbol: 'US30', futuresSymbol: 'YM=F', option: 'DIA · Dow ETF / US30', description: 'SPDR Dow Jones Industrial Average ETF Trust · US30 proxy' },
 ];
 
 function display(value: number | null | undefined, digits = 2) {
@@ -174,7 +178,7 @@ function PriceChart({
 
 export default function App() {
   const [symbol, setSymbol] = useState('QQQ');
-  const [us100CfdHigh, setUs100CfdHigh] = useState('');
+  const [cfdPreviousHighs, setCfdPreviousHighs] = useState<Record<string, string>>({ US100: '', US500: '', US30: '' });
   const [chain, setChain] = useState<Chain | null>(null);
   const [expiration, setExpiration] = useState(todayExpiration());
   const [loading, setLoading] = useState(true);
@@ -183,6 +187,10 @@ export default function App() {
   const [updatedAt, setUpdatedAt] = useState('');
   const requestIdRef = useRef(0);
   const activeInstrument = instruments.find((instrument) => instrument.symbol === symbol);
+  const cfdSymbol = activeInstrument?.cfdSymbol ?? chain?.cfdSymbol ?? 'US100';
+  const futuresSymbol = activeInstrument?.futuresSymbol ?? chain?.futuresSymbol ?? 'NQ=F';
+  const cfdPreviousHigh = cfdPreviousHighs[cfdSymbol] ?? '';
+  const cfdHigh = Number(cfdPreviousHigh);
 
   async function loadChain(nextSymbol = symbol, date = todayExpiration(), refresh = false) {
     const requestId = ++requestIdRef.current;
@@ -260,11 +268,17 @@ export default function App() {
   const putOi = (chain?.puts ?? []).reduce((total, item) => total + openInterest(item), 0);
   const putCallRatio = callOi ? putOi / callOi : null;
   const changePositive = (chain?.quote.changePercent ?? 0) >= 0;
-  const conversionFactor = Number(us100CfdHigh) > 0 && chain?.previousDayHigh
-    ? Number(us100CfdHigh) / chain.previousDayHigh
+  const cfdToFuturesFactor = cfdHigh > 0 && chain?.futuresPreviousDayHigh
+    ? cfdHigh / chain.futuresPreviousDayHigh
     : null;
-  const qqqConversionFactor = Number(us100CfdHigh) > 0 && chain?.qqqPreviousDayHigh
-    ? Number(us100CfdHigh) / chain.qqqPreviousDayHigh
+  const futuresToReferenceFactor = chain?.futuresPreviousDayHigh && chain.referencePreviousDayHigh
+    ? chain.futuresPreviousDayHigh / chain.referencePreviousDayHigh
+    : null;
+  const referenceToUnderlyingFactor = chain?.referencePreviousDayHigh && chain.previousDayHigh
+    ? chain.referencePreviousDayHigh / chain.previousDayHigh
+    : null;
+  const conversionFactor = cfdToFuturesFactor !== null && futuresToReferenceFactor !== null && referenceToUnderlyingFactor !== null
+    ? cfdToFuturesFactor * futuresToReferenceFactor * referenceToUnderlyingFactor
     : null;
   const cfdLevels = [
     ...walls.put.map((contract, index) => ({ contract, side: 'put' as const, label: `P${index + 1}` })),
@@ -279,29 +293,27 @@ export default function App() {
   const scaleMaximum = levelMaximum + levelSpan * 0.12;
   const levelPosition = (value: number) => `${((value - scaleMinimum) / (scaleMaximum - scaleMinimum)) * 100}%`;
   const wallDistance = (wall: Contract) => price ? (wall.strike / price - 1) * 100 : null;
-  const cfdScale = Number(us100CfdHigh) > 0 && chain?.futuresPreviousDayHigh
-    ? Number(us100CfdHigh) / chain.futuresPreviousDayHigh
-    : 1;
+  const cfdScale = cfdToFuturesFactor ?? 1;
   const toCfdLevel = (value: number) => conversionFactor === null || !chain?.previousDayHigh
     ? null
-    : Number(us100CfdHigh) * value / chain.previousDayHigh;
+    : cfdHigh * value / chain.previousDayHigh;
   const cfdChartLevels = useMemo(() => {
     const mapped = (value: number) => conversionFactor === null || !chain?.previousDayHigh
       ? null
-      : Number(us100CfdHigh) * value / chain.previousDayHigh;
+      : cfdHigh * value / chain.previousDayHigh;
     return [
       ...(conversionFactor !== null ? walls.put.flatMap((wall, index) => {
         const mappedPrice = mapped(wall.strike);
         return mappedPrice === null ? [] : [{ price: mappedPrice, color: '#f18270', title: `P${index + 1}` }];
       }) : []),
       ...(price !== null && price !== undefined && mapped(price) !== null ? [{ price: mapped(price)!, color: '#d8e2da', title: 'SPOT' }] : []),
-      ...(Number(us100CfdHigh) > 0 ? [{ price: Number(us100CfdHigh), color: '#f3c969', title: 'CFD PDH' }] : chain?.futuresPreviousDayHigh ? [{ price: chain.futuresPreviousDayHigh, color: '#f3c969', title: 'NQ PDH' }] : []),
+      ...(cfdHigh > 0 ? [{ price: cfdHigh, color: '#f3c969', title: 'CFD PDH' }] : chain?.futuresPreviousDayHigh ? [{ price: chain.futuresPreviousDayHigh, color: '#f3c969', title: `${futuresSymbol} PDH` }] : []),
       ...(conversionFactor !== null ? walls.call.flatMap((wall, index) => {
         const mappedPrice = mapped(wall.strike);
         return mappedPrice === null ? [] : [{ price: mappedPrice, color: '#55c99b', title: `C${index + 1}` }];
       }) : []),
     ];
-  }, [walls, price, chain?.previousDayHigh, chain?.futuresPreviousDayHigh, conversionFactor, us100CfdHigh]);
+  }, [walls, price, chain?.previousDayHigh, chain?.futuresPreviousDayHigh, conversionFactor, cfdHigh, futuresSymbol]);
   const instrumentChartPoints = useMemo(() => (chain?.history ?? []).map(({ time, close }) => ({ time, value: close })), [chain?.history]);
   const instrumentChartLevels = useMemo(() => [
     ...walls.put.map((wall, index) => ({ price: wall.strike, color: '#f18270', title: `P${index + 1}` })),
@@ -316,6 +328,10 @@ export default function App() {
     setExpiration('');
     setChain(null);
     void loadChain(nextSymbol, todayExpiration());
+  }
+
+  function updateCfdHigh(value: string) {
+    setCfdPreviousHighs((current) => ({ ...current, [cfdSymbol]: value }));
   }
 
   return (
@@ -401,13 +417,13 @@ export default function App() {
           legend={[{ title: 'PUT WALLS', color: '#f18270' }, { title: 'SPOT', color: '#d8e2da' }, { title: 'PDH', color: '#f3c969' }, { title: 'CALL WALLS', color: '#55c99b' }]}
         />
         <PriceChart
-          title="US100 overnight"
-          source="NQ=F · 5 MIN"
-          subtitle="FUTURES · NORMALIZED TO CFD HIGH"
+          title={`${cfdSymbol} overnight`}
+          source={`${futuresSymbol} · 5 MIN`}
+          subtitle={`FUTURES · NORMALIZED TO ${cfdSymbol} PDH`}
           points={overnightChartPoints}
           levels={cfdChartLevels}
           lineColor="#e0ad5a"
-          legend={[{ title: 'PUT WALLS', color: '#f18270' }, { title: Number(us100CfdHigh) > 0 ? 'CFD PDH' : 'NQ PDH', color: '#f3c969' }, { title: 'CFD SPOT', color: '#d8e2da' }, { title: 'CALL WALLS', color: '#55c99b' }]}
+          legend={[{ title: 'PUT WALLS', color: '#f18270' }, { title: cfdHigh > 0 ? `${cfdSymbol} PDH` : `${futuresSymbol} PDH`, color: '#f3c969' }, { title: `${cfdSymbol} SPOT`, color: '#d8e2da' }, { title: 'CALL WALLS', color: '#55c99b' }]}
         />
       </div>
 
@@ -438,31 +454,42 @@ export default function App() {
         </div>
       </section>
 
-      <section className="cfd-panel" aria-label="US100 CFD wall conversion">
+      <section className="cfd-panel" aria-label={`${cfdSymbol} CFD wall conversion`}>
         <div className="cfd-heading">
-          <div><h2>US100 CFD conversion</h2><span className="chain-caption">MAP OPTION LEVELS FROM THE PREVIOUS SESSION HIGH</span></div>
+          <div><h2>{cfdSymbol} CFD conversion</h2><span className="chain-caption">PREVIOUS-HIGH ALIGNMENT · CFD → FUTURES → OPTIONS</span></div>
           <span className="expiry-badge">{activeInstrument?.label ?? symbol} · 0DTE</span>
         </div>
         <div className="cfd-inputs">
           <label className="cfd-anchor-input">
-            <span className="metric-label">YOUR US100 CFD · PREVIOUS HIGH</span>
-            <div className="number-input-wrap"><span>US100</span><input aria-label="US100 CFD previous-day high" type="number" min="0" step="0.1" inputMode="decimal" placeholder="Enter yesterday high" value={us100CfdHigh} onChange={(event) => setUs100CfdHigh(event.target.value)} /></div>
+            <span className="metric-label">YOUR {cfdSymbol} · PREVIOUS HIGH</span>
+            <div className="number-input-wrap"><span>{cfdSymbol}</span><input aria-label={`${cfdSymbol} CFD previous-day high`} type="number" min="0" step="0.1" inputMode="decimal" placeholder="Enter yesterday high" value={cfdPreviousHigh} onChange={(event) => updateCfdHigh(event.target.value)} /></div>
           </label>
           <div className="reference-high">
-            <span className="metric-label">{activeInstrument?.label ?? symbol} · PREVIOUS SESSION HIGH</span>
+            <span className="metric-label">{activeInstrument?.label ?? symbol} · OPTION PDH</span>
             <strong>{chain?.previousDayHigh ? `$${display(chain.previousDayHigh)}` : '—'}</strong>
             <span>{chain?.previousDayDate ?? 'Waiting for daily data'}</span>
           </div>
-          <div className="reference-high qqq-reference-high">
-            <span className="metric-label">QQQ · PREVIOUS SESSION HIGH</span>
-            <strong>{chain?.qqqPreviousDayHigh ? `$${display(chain.qqqPreviousDayHigh)}` : '—'}</strong>
-            <span>{chain?.qqqPreviousDayDate ?? 'Waiting for daily data'} · {qqqConversionFactor ? `×${display(qqqConversionFactor, 3)}` : 'enter CFD high'}</span>
+          <div className="reference-high futures-reference-high">
+            <span className="metric-label">{futuresSymbol} · FUTURES PDH</span>
+            <strong>{chain?.futuresPreviousDayHigh ? `$${display(chain.futuresPreviousDayHigh)}` : '—'}</strong>
+            <span>{chain?.futuresPreviousDayDate ?? 'Waiting for daily data'}</span>
           </div>
-          <p className="conversion-formula">US100 level = your CFD high × option strike ÷ selected instrument's previous-session high. NQ=F is normalized to the same CFD high.</p>
+          {<div className="reference-high qqq-reference-high">
+            <span className="metric-label">{chain?.referenceSymbol ?? activeInstrument?.label ?? symbol} · REFERENCE PDH</span>
+            <strong>{chain?.referencePreviousDayHigh ? `$${display(chain.referencePreviousDayHigh)}` : '—'}</strong>
+            <span>{chain?.referencePreviousDayDate ?? 'Waiting for daily data'}</span>
+          </div>}
+          <div className="conversion-steps">
+            <span>{cfdSymbol} / {futuresSymbol}: <b>{cfdToFuturesFactor === null ? '—' : display(cfdToFuturesFactor, 5)}</b></span>
+            <span>{futuresSymbol} / {chain?.referenceSymbol ?? symbol}: <b>{futuresToReferenceFactor === null ? '—' : display(futuresToReferenceFactor, 5)}</b></span>
+            <span>{chain?.referenceSymbol ?? symbol} / {symbol}: <b>{referenceToUnderlyingFactor === null ? '—' : display(referenceToUnderlyingFactor, 5)}</b></span>
+            <span>COMBINED: <b>{conversionFactor === null ? '—' : display(conversionFactor, 5)}</b></span>
+          </div>
+          <p className="conversion-formula">CFD wall = option strike × ({cfdSymbol} PDH ÷ {futuresSymbol} PDH) × ({futuresSymbol} PDH ÷ {chain?.referenceSymbol ?? symbol} PDH) × ({chain?.referenceSymbol ?? symbol} PDH ÷ {symbol} PDH)</p>
         </div>
         <div className="conversion-table-wrap">
           <table className="conversion-table">
-            <thead><tr><th>LEVEL</th><th>OPTION STRIKE</th><th>VS PREV. HIGH</th><th>US100 CFD LEVEL</th></tr></thead>
+            <thead><tr><th>LEVEL</th><th>OPTION STRIKE</th><th>VS OPTION PDH</th><th>{cfdSymbol} CFD LEVEL</th></tr></thead>
             <tbody>
               {cfdLevels.length ? cfdLevels.map(({ contract, side, label }) => {
                 const convertedLevel = toCfdLevel(contract.strike);
@@ -471,9 +498,9 @@ export default function App() {
                   <td className={side === 'put' ? 'put-conversion' : 'call-conversion'}>{label}</td>
                   <td>{display(contract.strike)}</td>
                   <td>{relativeToHigh === null ? '—' : `${display(relativeToHigh)}%`}</td>
-                  <td className="converted-level">{convertedLevel === null ? 'Enter CFD high' : display(convertedLevel)}</td>
+                  <td className="converted-level">{convertedLevel === null ? `Enter ${cfdSymbol} high` : display(convertedLevel)}</td>
                 </tr>;
-              }) : <tr><td className="conversion-empty" colSpan={4}>No 0DTE wall levels for this instrument today.</td></tr>}
+              }) : <tr><td className="conversion-empty" colSpan={4}>{chain?.optionsError || error || 'No 0DTE wall levels for this instrument today.'}</td></tr>}
             </tbody>
           </table>
         </div>
@@ -500,7 +527,8 @@ export default function App() {
             <tbody>
               {loading ? <tr><td className="table-message" colSpan={11}><span className="loader" /> Loading option chain</td></tr>
                 : error ? <tr><td className="table-message error-message" colSpan={11}>{error}</td></tr>
-                  : wallRows.length === 0 ? <tr><td className="table-message" colSpan={11}>No wall levels found for this expiration.</td></tr>
+                  : chain?.optionsError ? <tr><td className="table-message" colSpan={11}>{chain.optionsError}</td></tr>
+                    : wallRows.length === 0 ? <tr><td className="table-message" colSpan={11}>No wall levels found for this expiration.</td></tr>
                     : wallRows.map(({ strike, call, put }) => {
                       const callRank = walls.call.findIndex((wall) => wall.strike === strike);
                       const putRank = walls.put.findIndex((wall) => wall.strike === strike);

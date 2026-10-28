@@ -113,6 +113,9 @@ h1 { margin: 0; font-size: 45px; line-height: 1.1; letter-spacing: -.025em; font
 .number-input-wrap input::-webkit-inner-spin-button, .number-input-wrap input::-webkit-outer-spin-button { appearance: none; margin: 0; }
 .reference-high strong { color: #dce4de; font-family: var(--mono); font-size: 15px; font-weight: 400; }
 .reference-high > span:last-child { color: #78857c; font-family: var(--mono); font-size: 8px; }
+.conversion-steps { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; }
+.conversion-steps span { padding: 6px 8px; border: 1px solid #303a33; border-radius: 3px; color: #87948b; font-family: var(--mono); font-size: 8px; }
+.conversion-steps b { color: #d9e3dc; font-weight: 400; }
 .conversion-formula { grid-column: 1 / -1; margin: 0; color: #77847b; font-family: var(--mono); font-size: 8px; }
 .conversion-table-wrap { overflow-x: auto; }
 .conversion-table { width: 100%; min-width: 580px; border-collapse: collapse; }
@@ -198,6 +201,8 @@ td { color: #aeb8b0; font-family: var(--mono); font-size: 10px; text-align: righ
   .chart-legend { justify-content: center; gap: 12px; padding-inline: 8px; font-size: 7px; }
   .cfd-heading { min-height: 58px; padding: 11px 12px; }
   .cfd-inputs { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 12px; }
+  .conversion-steps { gap: 5px; }
+  .conversion-steps span { padding: 5px 6px; font-size: 7px; }
   .conversion-formula { grid-column: 1 / -1; line-height: 1.5; }
   .conversion-table th, .conversion-table td { padding-inline: 9px; font-size: 9px; }
   .conversion-table th:first-child, .conversion-table td:first-child { padding-left: 12px; }
