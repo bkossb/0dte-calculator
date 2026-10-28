@@ -92,6 +92,7 @@ function PriceChart({
   levels,
   lineColor,
   legend,
+  size = 'compact',
 }: {
   title: string;
   source: string;
@@ -100,6 +101,7 @@ function PriceChart({
   levels: ChartLevel[];
   lineColor: string;
   legend: { title: string; color: string }[];
+  size?: 'compact' | 'featured';
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -163,7 +165,7 @@ function PriceChart({
   }, [points, levels, lineColor]);
 
   return (
-    <section className="chart-panel" aria-label={`${title} intraday price chart`}>
+    <section className={`chart-panel ${size === 'featured' ? 'chart-featured' : 'chart-compact'}`} aria-label={`${title} intraday price chart`}>
       <div className="chart-heading">
         <div><h2>{title} <span className="chart-source">{source}</span></h2><span className="chain-caption">{subtitle}</span></div>
         <span className="expiry-badge">1D</span>
@@ -377,12 +379,25 @@ export default function App() {
           <strong className="today-expiry">0DTE · {expirationLabel(Number(expiration))}</strong>
         </div>
         <div className="toolbar-meta">
-          <span className="contract-count">{chain?.optionsError ? 'NO 0DTE' : `${numberFormat.format(wallRows.length)} wall levels`}</span>
-          <span className="toolbar-separator" />
           <span>AUTO · 5 MIN</span>
           <button className={`icon-button ${refreshing ? 'spinning' : ''}`} onClick={() => void loadChain(symbol, todayExpiration(), true)} title="Refresh chain and chart" aria-label="Refresh chain and chart" disabled={loading || refreshing}>
             <RefreshCw size={15} />
           </button>
+        </div>
+      </section>
+
+      <section className="cfd-entry-panel" aria-label={`${cfdSymbol} previous-day high input`}>
+        <div className="cfd-entry-title">
+          <span className="control-label">CFD ANCHOR · PREVIOUS SESSION HIGH</span>
+          <span className="expiry-badge">{cfdSymbol}</span>
+        </div>
+        <label className="cfd-anchor-input">
+          <span className="metric-label">YOUR {cfdSymbol} · PREVIOUS HIGH</span>
+          <div className="number-input-wrap"><span>{cfdSymbol}</span><input aria-label={`${cfdSymbol} CFD previous-day high`} type="number" min="0" step="0.1" inputMode="decimal" placeholder="Enter yesterday high" value={cfdPreviousHigh} onChange={(event) => updateCfdHigh(event.target.value)} /></div>
+        </label>
+        <div className="cfd-entry-reference">
+          <span>{futuresSymbol} PDH <strong>{chain?.futuresPreviousDayHigh ? display(chain.futuresPreviousDayHigh) : '—'}</strong></span>
+          <span>{chain?.referenceSymbol ?? activeInstrument?.label ?? symbol} PDH <strong>{chain?.referencePreviousDayHigh ? display(chain.referencePreviousDayHigh) : '—'}</strong></span>
         </div>
       </section>
 
@@ -427,6 +442,7 @@ export default function App() {
           levels={cfdChartLevels}
           lineColor="#e0ad5a"
           legend={[{ title: 'PUT WALLS', color: '#f18270' }, { title: cfdHigh > 0 ? `${cfdSymbol} PDH` : `${futuresSymbol} PDH`, color: '#f3c969' }, { title: `${cfdSymbol} SPOT`, color: '#d8e2da' }, { title: 'CALL WALLS', color: '#55c99b' }]}
+          size="featured"
         />
       </div>
 
@@ -463,10 +479,6 @@ export default function App() {
           <span className="expiry-badge">{activeInstrument?.label ?? symbol} · 0DTE</span>
         </div>
         <div className="cfd-inputs">
-          <label className="cfd-anchor-input">
-            <span className="metric-label">YOUR {cfdSymbol} · PREVIOUS HIGH</span>
-            <div className="number-input-wrap"><span>{cfdSymbol}</span><input aria-label={`${cfdSymbol} CFD previous-day high`} type="number" min="0" step="0.1" inputMode="decimal" placeholder="Enter yesterday high" value={cfdPreviousHigh} onChange={(event) => updateCfdHigh(event.target.value)} /></div>
-          </label>
           <div className="reference-high">
             <span className="metric-label">{activeInstrument?.label ?? symbol} · OPTION PDH</span>
             <strong>{chain?.previousDayHigh ? `$${display(chain.previousDayHigh)}` : '—'}</strong>

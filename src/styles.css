@@ -59,6 +59,12 @@ h1 { margin: 0; font-size: 45px; line-height: 1.1; letter-spacing: -.025em; font
 .icon-button:hover { border-color: #607466; color: var(--mint); }
 .icon-button:disabled { opacity: .5; cursor: default; }
 .spinning svg { animation: spin .8s linear infinite; }
+.cfd-entry-panel { display: grid; grid-template-columns: minmax(220px, .7fr) minmax(250px, 1fr); align-items: center; gap: 12px 20px; margin-bottom: 15px; padding: 14px 18px; border: 1px solid var(--line); border-radius: 5px; background: #141a16; }
+.cfd-entry-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.cfd-entry-panel .cfd-anchor-input { display: grid; grid-template-columns: minmax(100px, .75fr) minmax(160px, 1fr); align-items: center; gap: 12px; }
+.cfd-entry-reference { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px 18px; color: #78857c; font-family: var(--mono); font-size: 8px; }
+.cfd-entry-reference span { display: inline-flex; gap: 6px; }
+.cfd-entry-reference strong { color: #dce4de; font-weight: 400; }
 .metrics { display: grid; grid-template-columns: repeat(4, 1fr); margin: 0 0 15px; border: 1px solid var(--line); border-top: 0; background: #141a16; }
 .metric { min-height: 94px; position: relative; display: flex; flex-direction: column; justify-content: center; padding: 14px 19px; border-right: 1px solid var(--line); }
 .metric:last-child { border-right: 0; }
@@ -66,9 +72,11 @@ h1 { margin: 0; font-size: 45px; line-height: 1.1; letter-spacing: -.025em; font
 .metric-value { margin-top: 7px; color: #e7ece8; font-family: var(--mono); font-size: 22px; font-weight: 400; }
 .metric-detail { position: absolute; right: 18px; bottom: 17px; color: #67736a; font-size: 8px; }
 .metric-detail.call-color, .metric-detail.put-color { color: inherit; }
-.chart-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 15px; margin-bottom: 15px; }
+.chart-pair { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); align-items: start; gap: 15px; margin-bottom: 15px; }
 .chart-panel { margin-bottom: 15px; border: 1px solid var(--line); border-radius: 5px; background: rgba(21, 28, 24, .93); overflow: hidden; }
 .chart-pair .chart-panel { min-width: 0; margin-bottom: 0; }
+.chart-pair .chart-compact .chart-canvas { height: 300px; }
+.chart-pair .chart-featured .chart-canvas { height: 420px; }
 .chart-heading { min-height: 65px; display: flex; align-items: center; justify-content: space-between; padding: 12px 19px; border-bottom: 1px solid var(--line); }
 .chart-heading h2 { margin-bottom: 5px; }
 .chart-source { margin-left: 6px; color: #738178; font-family: var(--mono); font-size: 8px; font-weight: 400; }
@@ -192,9 +200,14 @@ td { color: #aeb8b0; font-family: var(--mono); font-size: 10px; text-align: righ
   .metric:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
   .metric-value { font-size: 19px; }
   .metric-detail { right: 11px; bottom: 13px; font-size: 7px; }
+  .cfd-entry-panel { grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 12px; }
+  .cfd-entry-panel .cfd-anchor-input { grid-template-columns: 1fr; gap: 7px; }
+  .cfd-entry-reference { grid-column: auto; gap: 7px 12px; }
   .level-row { grid-template-columns: 58px minmax(40px, 1fr) 62px 50px; gap: 5px; }
   .chart-heading { min-height: 58px; padding: 11px 12px; }
   .chart-canvas { height: 280px; }
+  .chart-pair .chart-compact .chart-canvas { height: 280px; }
+  .chart-pair .chart-featured .chart-canvas { height: 380px; }
   .chart-empty { height: 210px; }
   .chart-range-notes { padding-inline: 8px; }
   .range-note { gap: 5px; font-size: 7px; }
