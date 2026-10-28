@@ -6,6 +6,6 @@
     "build": "echo 'Static app for Vercel'"
   },
   "engines": {
-    "node": "18.x"
+    "node": "24.x"
   }
 }
