@@ -1,11 +1,12 @@
 const SYMBOL_PATTERN = /^[A-Z0-9.^=-]{1,15}$/;
 const CHART_RANGES = { '1d': '5m' };
 const INSTRUMENT_MARKETS = {
-  SPY: { cfdSymbol: 'US500', futuresSymbol: 'ES=F', referenceSymbol: 'SPY' },
-  QQQ: { cfdSymbol: 'US100', futuresSymbol: 'NQ=F', referenceSymbol: 'QQQ' },
-  '^NDX': { cfdSymbol: 'US100', futuresSymbol: 'NQ=F', referenceSymbol: 'QQQ' },
-  '^SPX': { cfdSymbol: 'US500', futuresSymbol: 'ES=F', referenceSymbol: 'SPY' },
+  SPY: { cfdSymbol: 'US500', futuresSymbol: 'ES=F', referenceSymbol: 'SPY', confirmationSymbol: '^SPX' },
+  QQQ: { cfdSymbol: 'US100', futuresSymbol: 'NQ=F', referenceSymbol: 'QQQ', confirmationSymbol: '^NDX' },
+  '^NDX': { cfdSymbol: 'US100', futuresSymbol: 'NQ=F', referenceSymbol: 'QQQ', confirmationSymbol: 'QQQ' },
+  '^SPX': { cfdSymbol: 'US500', futuresSymbol: 'ES=F', referenceSymbol: 'SPY', confirmationSymbol: 'SPY' },
   DIA: { cfdSymbol: 'US30', futuresSymbol: 'YM=F', referenceSymbol: 'DIA' },
+  GLD: { cfdSymbol: 'XAUUSD', futuresSymbol: 'GC=F', referenceSymbol: 'GLD' },
 };
 const YAHOO_HEADERS = { 'User-Agent': 'Mozilla/5.0 (compatible; OptionsDesk/1.0)' };
 let cachedYahooSession = null;
@@ -79,7 +80,9 @@ export default async function handler(request, response) {
   referenceDailyUrl.searchParams.set('range', '5d');
   referenceDailyUrl.searchParams.set('interval', '1d');
   const overnightUrl = new URL(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(market.futuresSymbol)}`);
-  overnightUrl.searchParams.set('range', '1d');
+  const now = Math.floor(Date.now() / 1000);
+  overnightUrl.searchParams.set('period1', String(now - 24 * 60 * 60));
+  overnightUrl.searchParams.set('period2', String(now));
   overnightUrl.searchParams.set('interval', '5m');
   overnightUrl.searchParams.set('includePrePost', 'true');
   const futuresDailyUrl = new URL(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(market.futuresSymbol)}`);
@@ -113,9 +116,52 @@ export default async function handler(request, response) {
       return response.status(upstream.status === 429 ? 429 : 502).json({ error: message });
     }
 
-    const selectedOptions = result.options?.[0];
-    const hasContracts = (selectedOptions?.calls?.length ?? 0) + (selectedOptions?.puts?.length ?? 0) > 0;
-    const hasRequestedExpiration = !expiration || (selectedOptions?.expirationDate === expiration && hasContracts);
+    let selectedOptions = result.options?.[0];
+    let expirations = result.expirationDates ?? [];
+    let isNearestExpiration = false;
+    let optionsError = null;
+    const hasContracts = (options) => (options?.calls?.length ?? 0) + (options?.puts?.length ?? 0) > 0;
+    const hasRequestedExpiration = !expiration || (selectedOptions?.expirationDate === expiration && hasContracts(selectedOptions));
+
+    if (expiration && !hasRequestedExpiration) {
+      const nearestUrl = new URL(url);
+      nearestUrl.searchParams.delete('date');
+      const nearestResponse = await fetch(nearestUrl, { headers: requestHeaders });
+      const nearestPayload = nearestResponse.ok ? await nearestResponse.json().catch(() => null) : null;
+      const nearestResult = nearestPayload?.optionChain?.result?.[0];
+      const nearestOptions = nearestResult?.options?.find((options) => options.expirationDate >= expiration && hasContracts(options));
+
+      if (nearestOptions) {
+        selectedOptions = nearestOptions;
+        expirations = nearestResult.expirationDates ?? expirations;
+        isNearestExpiration = true;
+      } else {
+        optionsError = `Brak opcji dla ${symbol} dziś ani w najbliższym terminie.`;
+      }
+    }
+
+    let confirmation = null;
+    let confirmationWarning = null;
+    if (market.confirmationSymbol && selectedOptions?.expirationDate) {
+      const confirmationUrl = new URL(`https://query1.finance.yahoo.com/v7/finance/options/${encodeURIComponent(market.confirmationSymbol)}`);
+      confirmationUrl.searchParams.set('date', String(selectedOptions.expirationDate));
+      confirmationUrl.searchParams.set('crumb', crumb);
+      const confirmationResponse = await fetch(confirmationUrl, { headers: requestHeaders }).catch(() => null);
+      const confirmationPayload = confirmationResponse?.ok ? await confirmationResponse.json().catch(() => null) : null;
+      const confirmationResult = confirmationPayload?.optionChain?.result?.[0];
+      const confirmationOptions = confirmationResult?.options?.find((options) => options.expirationDate === selectedOptions.expirationDate && hasContracts(options));
+
+      if (confirmationOptions) {
+        confirmation = {
+          symbol: market.confirmationSymbol,
+          price: confirmationResult.quote?.regularMarketPrice ?? null,
+          calls: confirmationOptions.calls ?? [],
+          puts: confirmationOptions.puts ?? [],
+        };
+      } else {
+        confirmationWarning = `Brak chainu ${market.confirmationSymbol} dla tego samego terminu.`;
+      }
+    }
 
     const chartResult = chartPayload?.chart?.result?.[0];
     const timestamps = chartResult?.timestamp ?? [];
@@ -137,17 +183,22 @@ export default async function handler(request, response) {
       cfdSymbol: market.cfdSymbol,
       futuresSymbol: market.futuresSymbol,
       referenceSymbol: market.referenceSymbol,
+      confirmationSymbol: market.confirmationSymbol ?? null,
       quote: {
         price: result.quote?.regularMarketPrice ?? null,
         previousClose: result.quote?.regularMarketPreviousClose ?? null,
         changePercent: result.quote?.regularMarketChangePercent ?? null,
         currency: result.quote?.currency ?? 'USD',
       },
-      expirations: result.expirationDates ?? [],
-      selectedExpiration: expiration || selectedOptions?.expirationDate || null,
-      calls: hasRequestedExpiration ? selectedOptions?.calls ?? [] : [],
-      puts: hasRequestedExpiration ? selectedOptions?.puts ?? [] : [],
-      optionsError: hasRequestedExpiration ? null : `Brak opcji wygasających dziś dla ${symbol} (0DTE).`,
+      expirations,
+      selectedExpiration: selectedOptions?.expirationDate ?? expiration,
+      isNearestExpiration,
+      calls: selectedOptions?.calls ?? [],
+      puts: selectedOptions?.puts ?? [],
+      optionsError,
+      optionsWarning: isNearestExpiration ? `Brak opcji 0DTE dla ${symbol}; pokazuję najbliższy termin.` : null,
+      confirmation,
+      confirmationWarning,
       chartRange: range,
       history,
       chartError: history.length ? null : chartPayload?.chart?.error?.description || 'Yahoo Finance nie zwrócił danych historycznych.',
