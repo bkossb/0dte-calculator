@@ -64,7 +64,8 @@ const numberFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }
 const compactFormat = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
 const percentFormat = new Intl.NumberFormat('en-US', { style: 'percent', maximumFractionDigits: 1 });
 const WALL_TOLERANCE = 0.04;
-const CONFLUENCE_TOLERANCE_PCT = 0.5;
+const CASH_INDEX_WALL_TOLERANCE = 0.02;
+const CONFLUENCE_TOLERANCE_PCT = 0.25;
 const instruments = [
   { symbol: '^NDX', label: 'NDX', exchange: 'NASDAQ', cfdSymbol: 'US100', futuresSymbol: 'NQ=F', option: 'NDX · US100 · QQQ confirm', description: 'Nasdaq-100 index options · QQQ confluence' },
   { symbol: 'SPY', label: 'SPY', exchange: 'NYSE ARCA', cfdSymbol: 'US500', futuresSymbol: 'ES=F', option: 'SPY · US500 · SPX confirm', description: 'S&P 500 ETF options · SPX confluence' },
@@ -100,10 +101,10 @@ function heat(value: number, maximum: number, side: 'call' | 'put') {
   return { backgroundColor: `rgba(${color})` };
 }
 
-function selectWallContracts(contracts: Contract[], spot: number | null, direction: 'above' | 'below') {
+function selectWallContracts(contracts: Contract[], spot: number | null, direction: 'above' | 'below', tolerance: number) {
   if (spot === null || spot <= 0) return [];
-  const minimum = spot * (1 - WALL_TOLERANCE);
-  const maximum = spot * (1 + WALL_TOLERANCE);
+  const minimum = spot * (1 - tolerance);
+  const maximum = spot * (1 + tolerance);
   return contracts
     .filter((contract) => Number.isFinite(contract.openInterest) && contract.openInterest > 0)
     .filter((contract) => direction === 'above'
@@ -272,17 +273,18 @@ export default function App() {
   }, [chain]);
 
   const price = chain?.quote.price;
+  const wallTolerance = symbol === '^NDX' || symbol === '^SPX' ? CASH_INDEX_WALL_TOLERANCE : WALL_TOLERANCE;
   const walls = useMemo(() => {
     return {
-      call: selectWallContracts(chain?.calls ?? [], price ?? null, 'above'),
-      put: selectWallContracts(chain?.puts ?? [], price ?? null, 'below'),
+      call: selectWallContracts(chain?.calls ?? [], price ?? null, 'above', wallTolerance),
+      put: selectWallContracts(chain?.puts ?? [], price ?? null, 'below', wallTolerance),
     };
-  }, [chain, price]);
+  }, [chain, price, wallTolerance]);
   const confirmationPrice = chain?.confirmation?.price ?? null;
   const confirmationWalls = useMemo(() => ({
-    call: selectWallContracts(chain?.confirmation?.calls ?? [], confirmationPrice, 'above'),
-    put: selectWallContracts(chain?.confirmation?.puts ?? [], confirmationPrice, 'below'),
-  }), [chain?.confirmation, confirmationPrice]);
+    call: selectWallContracts(chain?.confirmation?.calls ?? [], confirmationPrice, 'above', wallTolerance),
+    put: selectWallContracts(chain?.confirmation?.puts ?? [], confirmationPrice, 'below', wallTolerance),
+  }), [chain?.confirmation, confirmationPrice, wallTolerance]);
   const wallStrikes = new Set([...walls.call, ...walls.put].map((wall) => wall.strike));
   const wallRows = strikes.filter((row) => wallStrikes.has(row.strike));
   const openInterest = (contract: Contract) => Number.isFinite(contract.openInterest) ? contract.openInterest : 0;
@@ -502,7 +504,7 @@ export default function App() {
         <div className="levels-heading">
           <div>
             <h2>Key levels</h2>
-            <span className="chain-caption">±4% SPOT · CONFIRMED WHEN PEER OFFSET IS WITHIN 0.5 P.P.</span>
+            <span className="chain-caption">±{display(wallTolerance * 100, 0)}% SPOT · PEER OFFSET ≤0.25 P.P.</span>
             {chain?.confirmationWarning && <p className="options-warning">{chain.confirmationWarning}</p>}
           </div>
           <span className="levels-symbol">{chain?.symbol ?? symbol} · {expiration ? expirationLabel(Number(expiration)) : '—'}</span>
@@ -582,7 +584,7 @@ export default function App() {
         <div className="chain-heading">
           <div>
             <h2>Wall strikes</h2>
-            <span className="chain-caption">TOP 4 CALLS ABOVE · TOP 4 PUTS BELOW · WITHIN ±4% SPOT</span>
+            <span className="chain-caption">TOP 4 CALLS + PUTS · WITHIN ±{display(wallTolerance * 100, 0)}% SPOT</span>
             {chain?.optionsWarning && <p className="options-warning">{chain.optionsWarning}</p>}
           </div>
           <span className="expiry-badge">{chain?.isNearestExpiration ? 'NEAREST · ' : ''}{expiration ? expirationLabel(Number(expiration)) : 'SELECT EXPIRATION'}</span>
