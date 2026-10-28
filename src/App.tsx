@@ -267,6 +267,9 @@ export default function App() {
   const callOi = (chain?.calls ?? []).reduce((total, item) => total + openInterest(item), 0);
   const putOi = (chain?.puts ?? []).reduce((total, item) => total + openInterest(item), 0);
   const putCallRatio = callOi ? putOi / callOi : null;
+  const optionsUnavailableMessage = chain?.optionsError
+    ? `${chain.optionsError}${chain.expirations[0] ? ` Najbliższy termin: ${expirationLabel(chain.expirations[0])}.` : ''}`
+    : '';
   const changePositive = (chain?.quote.changePercent ?? 0) >= 0;
   const cfdToFuturesFactor = cfdHigh > 0 && chain?.futuresPreviousDayHigh
     ? cfdHigh / chain.futuresPreviousDayHigh
@@ -374,7 +377,7 @@ export default function App() {
           <strong className="today-expiry">0DTE · {expirationLabel(Number(expiration))}</strong>
         </div>
         <div className="toolbar-meta">
-          <span className="contract-count">{numberFormat.format(wallRows.length)} wall levels</span>
+          <span className="contract-count">{chain?.optionsError ? 'NO 0DTE' : `${numberFormat.format(wallRows.length)} wall levels`}</span>
           <span className="toolbar-separator" />
           <span>AUTO · 5 MIN</span>
           <button className={`icon-button ${refreshing ? 'spinning' : ''}`} onClick={() => void loadChain(symbol, todayExpiration(), true)} title="Refresh chain and chart" aria-label="Refresh chain and chart" disabled={loading || refreshing}>
@@ -386,17 +389,17 @@ export default function App() {
       <section className="metrics" aria-label="Open interest summary">
         <article className="metric">
           <span className="metric-label">CALL OPEN INTEREST</span>
-          <strong className="metric-value">{chain ? compactFormat.format(callOi) : '—'}</strong>
+          <strong className="metric-value">{chain && !chain.optionsError ? compactFormat.format(callOi) : '—'}</strong>
           <span className="metric-detail call-color">CALLS</span>
         </article>
         <article className="metric">
           <span className="metric-label">PUT OPEN INTEREST</span>
-          <strong className="metric-value">{chain ? compactFormat.format(putOi) : '—'}</strong>
+          <strong className="metric-value">{chain && !chain.optionsError ? compactFormat.format(putOi) : '—'}</strong>
           <span className="metric-detail put-color">PUTS</span>
         </article>
         <article className="metric ratio-metric">
           <span className="metric-label">PUT / CALL RATIO</span>
-          <strong className="metric-value">{putCallRatio === null ? '—' : display(putCallRatio, 2)}</strong>
+          <strong className="metric-value">{chain?.optionsError || putCallRatio === null ? '—' : display(putCallRatio, 2)}</strong>
           <span className="metric-detail">OPEN INTEREST</span>
         </article>
         <article className="metric quote-metric">
@@ -500,7 +503,7 @@ export default function App() {
                   <td>{relativeToHigh === null ? '—' : `${display(relativeToHigh)}%`}</td>
                   <td className="converted-level">{convertedLevel === null ? `Enter ${cfdSymbol} high` : display(convertedLevel)}</td>
                 </tr>;
-              }) : <tr><td className="conversion-empty" colSpan={4}>{chain?.optionsError || error || 'No 0DTE wall levels for this instrument today.'}</td></tr>}
+              }) : <tr><td className="conversion-empty" colSpan={4}>{optionsUnavailableMessage || error || 'No 0DTE wall levels for this instrument today.'}</td></tr>}
             </tbody>
           </table>
         </div>
@@ -527,7 +530,7 @@ export default function App() {
             <tbody>
               {loading ? <tr><td className="table-message" colSpan={11}><span className="loader" /> Loading option chain</td></tr>
                 : error ? <tr><td className="table-message error-message" colSpan={11}>{error}</td></tr>
-                  : chain?.optionsError ? <tr><td className="table-message" colSpan={11}>{chain.optionsError}</td></tr>
+                  : chain?.optionsError ? <tr><td className="table-message" colSpan={11}>{optionsUnavailableMessage}</td></tr>
                     : wallRows.length === 0 ? <tr><td className="table-message" colSpan={11}>No wall levels found for this expiration.</td></tr>
                     : wallRows.map(({ strike, call, put }) => {
                       const callRank = walls.call.findIndex((wall) => wall.strike === strike);
