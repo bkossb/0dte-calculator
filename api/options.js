@@ -1,4 +1,5 @@
 const SYMBOL_PATTERN = /^[A-Z0-9.^=-]{1,15}$/;
+const CHART_RANGES = { '1d': '5m' };
 const YAHOO_HEADERS = { 'User-Agent': 'Mozilla/5.0 (compatible; OptionsDesk/1.0)' };
 let cachedYahooSession = null;
 
@@ -23,6 +24,7 @@ async function getYahooSession() {
 export default async function handler(request, response) {
   const symbol = String(request.query.symbol || 'QQQ').trim().toUpperCase();
   const expiration = request.query.date ? Number(request.query.date) : null;
+  const range = String(request.query.range || '1d');
 
   if (!SYMBOL_PATTERN.test(symbol)) {
     return response.status(400).json({ error: 'Nieprawidłowy symbol.' });
@@ -30,17 +32,28 @@ export default async function handler(request, response) {
   if (expiration !== null && (!Number.isSafeInteger(expiration) || expiration <= 0)) {
     return response.status(400).json({ error: 'Nieprawidłowy termin wygaśnięcia.' });
   }
+  if (!Object.hasOwn(CHART_RANGES, range)) {
+    return response.status(400).json({ error: 'Nieprawidłowy zakres wykresu.' });
+  }
 
   const url = new URL(`https://query1.finance.yahoo.com/v7/finance/options/${encodeURIComponent(symbol)}`);
   if (expiration) url.searchParams.set('date', String(expiration));
+  const chartUrl = new URL(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}`);
+  chartUrl.searchParams.set('range', range);
+  chartUrl.searchParams.set('interval', CHART_RANGES[range]);
 
   try {
     const { cookie, crumb } = await getYahooSession();
     url.searchParams.set('crumb', crumb);
-    const upstream = await fetch(url, {
-      headers: { ...YAHOO_HEADERS, Cookie: cookie },
-    });
-    const payload = await upstream.json();
+    const requestHeaders = { ...YAHOO_HEADERS, Cookie: cookie };
+    const [upstream, chartUpstream] = await Promise.all([
+      fetch(url, { headers: requestHeaders }),
+      fetch(chartUrl, { headers: requestHeaders }).catch(() => null),
+    ]);
+    const [payload, chartPayload] = await Promise.all([
+      upstream.json(),
+      chartUpstream?.ok ? chartUpstream.json().catch(() => null) : null,
+    ]);
     const result = payload?.optionChain?.result?.[0];
 
     if (!upstream.ok || payload?.optionChain?.error || !result) {
@@ -48,7 +61,18 @@ export default async function handler(request, response) {
       return response.status(upstream.status === 429 ? 429 : 502).json({ error: message });
     }
 
-    response.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300');
+    const selectedOptions = result.options?.[0];
+    const hasContracts = (selectedOptions?.calls?.length ?? 0) + (selectedOptions?.puts?.length ?? 0) > 0;
+    if (expiration && (selectedOptions?.expirationDate !== expiration || !hasContracts)) {
+      return response.status(404).json({ error: `Brak opcji wygasających dziś dla ${symbol} (0DTE).` });
+    }
+
+    const chartResult = chartPayload?.chart?.result?.[0];
+    const timestamps = chartResult?.timestamp ?? [];
+    const closes = chartResult?.indicators?.quote?.[0]?.close ?? [];
+    const history = timestamps.flatMap((time, index) => Number.isFinite(closes[index]) ? [{ time, close: closes[index] }] : []);
+
+    response.setHeader('Cache-Control', 'no-store');
     return response.status(200).json({
       symbol,
       quote: {
@@ -58,9 +82,12 @@ export default async function handler(request, response) {
         currency: result.quote?.currency ?? 'USD',
       },
       expirations: result.expirationDates ?? [],
-      selectedExpiration: result.options?.[0]?.expirationDate ?? expiration,
-      calls: result.options?.[0]?.calls ?? [],
-      puts: result.options?.[0]?.puts ?? [],
+      selectedExpiration: selectedOptions?.expirationDate ?? expiration,
+      calls: selectedOptions?.calls ?? [],
+      puts: selectedOptions?.puts ?? [],
+      chartRange: range,
+      history,
+      chartError: history.length ? null : chartPayload?.chart?.error?.description || 'Yahoo Finance nie zwrócił danych historycznych.',
       fetchedAt: new Date().toISOString(),
     });
   } catch {
