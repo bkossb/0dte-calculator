@@ -66,9 +66,12 @@ h1 { margin: 0; font-size: 45px; line-height: 1.1; letter-spacing: -.025em; font
 .metric-value { margin-top: 7px; color: #e7ece8; font-family: var(--mono); font-size: 22px; font-weight: 400; }
 .metric-detail { position: absolute; right: 18px; bottom: 17px; color: #67736a; font-size: 8px; }
 .metric-detail.call-color, .metric-detail.put-color { color: inherit; }
+.chart-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 15px; margin-bottom: 15px; }
 .chart-panel { margin-bottom: 15px; border: 1px solid var(--line); border-radius: 5px; background: rgba(21, 28, 24, .93); overflow: hidden; }
+.chart-pair .chart-panel { min-width: 0; margin-bottom: 0; }
 .chart-heading { min-height: 65px; display: flex; align-items: center; justify-content: space-between; padding: 12px 19px; border-bottom: 1px solid var(--line); }
 .chart-heading h2 { margin-bottom: 5px; }
+.chart-source { margin-left: 6px; color: #738178; font-family: var(--mono); font-size: 8px; font-weight: 400; }
 .chart-canvas { width: 100%; height: 320px; }
 .chart-empty { height: 240px; display: grid; place-items: center; padding: 20px; color: var(--muted); font-size: 12px; text-align: center; }
 .chart-range-notes { display: flex; justify-content: space-between; gap: 10px; padding: 8px 14px; border-top: 1px solid var(--line); }
@@ -83,6 +86,7 @@ h1 { margin: 0; font-size: 45px; line-height: 1.1; letter-spacing: -.025em; font
 .put-dot { background: var(--coral); }
 .spot-dot { background: #d8e2da; }
 .call-dot { background: var(--mint); }
+.pdh-dot { background: #f3c969; }
 .levels-panel { margin-bottom: 15px; border: 1px solid var(--line); border-radius: 5px; background: rgba(21, 28, 24, .93); }
 .levels-heading { min-height: 62px; display: flex; align-items: center; justify-content: space-between; padding: 12px 19px; border-bottom: 1px solid var(--line); }
 .levels-heading h2 { margin-bottom: 5px; }
@@ -99,6 +103,27 @@ h1 { margin: 0; font-size: 45px; line-height: 1.1; letter-spacing: -.025em; font
 .spot-level .level-name, .spot-level .level-distance { color: #c1cbc3; }
 .call-level .level-name, .call-level .level-distance { color: var(--mint); }
 .call-level .level-marker { background: var(--mint); }
+.cfd-panel { margin-bottom: 15px; border: 1px solid var(--line); border-radius: 5px; background: rgba(21, 28, 24, .93); overflow: hidden; }
+.cfd-heading { min-height: 65px; display: flex; align-items: center; justify-content: space-between; padding: 12px 19px; border-bottom: 1px solid var(--line); }
+.cfd-heading h2 { margin-bottom: 5px; }
+.cfd-inputs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px; padding: 15px 19px; border-bottom: 1px solid var(--line); }
+.cfd-anchor-input, .reference-high { display: flex; flex-direction: column; justify-content: center; gap: 7px; min-width: 0; }
+.number-input-wrap { height: 38px; display: flex; align-items: center; gap: 10px; padding: 0 10px; border: 1px solid #354139; border-radius: 4px; background: #111713; color: var(--mint); font-family: var(--mono); font-size: 9px; }
+.number-input-wrap input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: #e7ece8; font-family: var(--mono); font-size: 12px; }
+.number-input-wrap input::-webkit-inner-spin-button, .number-input-wrap input::-webkit-outer-spin-button { appearance: none; margin: 0; }
+.reference-high strong { color: #dce4de; font-family: var(--mono); font-size: 15px; font-weight: 400; }
+.reference-high > span:last-child { color: #78857c; font-family: var(--mono); font-size: 8px; }
+.conversion-formula { grid-column: 1 / -1; margin: 0; color: #77847b; font-family: var(--mono); font-size: 8px; }
+.conversion-table-wrap { overflow-x: auto; }
+.conversion-table { width: 100%; min-width: 580px; border-collapse: collapse; }
+.conversion-table th { position: static; height: 34px; padding: 0 12px; border-bottom: 1px solid var(--line); background: #18201b; text-align: right; }
+.conversion-table th:first-child, .conversion-table td:first-child { padding-left: 19px; text-align: left; }
+.conversion-table td { height: 34px; border-bottom: 1px solid #242d27; }
+.conversion-table tbody tr:last-child td { border-bottom: 0; }
+.put-conversion { color: var(--coral); }
+.call-conversion { color: var(--mint); }
+.converted-level { color: #f3c969; font-weight: 500; }
+.conversion-empty { height: 60px !important; color: #78857c; text-align: center !important; }
 .chain-panel { border: 1px solid var(--line); border-radius: 5px; background: rgba(21, 28, 24, .93); overflow: hidden; }
 .chain-heading { min-height: 76px; display: flex; align-items: center; justify-content: space-between; padding: 15px 19px; border-bottom: 1px solid var(--line); }
 h2 { margin: 0 0 6px; color: #e3e9e4; font-size: 15px; font-weight: 600; }
@@ -139,6 +164,10 @@ td { color: #aeb8b0; font-family: var(--mono); font-size: 10px; text-align: righ
 .page-footer { display: flex; justify-content: space-between; padding: 19px 2px 28px; color: #637067; font-size: 8px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+@media (max-width: 1050px) {
+  .chart-pair { grid-template-columns: minmax(0, 1fr); }
+}
+
 @media (max-width: 760px) {
   .desk { width: calc(100% - 32px); }
   .topbar { height: 56px; }
@@ -160,12 +189,18 @@ td { color: #aeb8b0; font-family: var(--mono); font-size: 10px; text-align: righ
   .metric:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
   .metric-value { font-size: 19px; }
   .metric-detail { right: 11px; bottom: 13px; font-size: 7px; }
+  .level-row { grid-template-columns: 58px minmax(40px, 1fr) 62px 50px; gap: 5px; }
   .chart-heading { min-height: 58px; padding: 11px 12px; }
   .chart-canvas { height: 280px; }
   .chart-empty { height: 210px; }
   .chart-range-notes { padding-inline: 8px; }
   .range-note { gap: 5px; font-size: 7px; }
   .chart-legend { justify-content: center; gap: 12px; padding-inline: 8px; font-size: 7px; }
+  .cfd-heading { min-height: 58px; padding: 11px 12px; }
+  .cfd-inputs { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 12px; }
+  .conversion-formula { grid-column: 1 / -1; line-height: 1.5; }
+  .conversion-table th, .conversion-table td { padding-inline: 9px; font-size: 9px; }
+  .conversion-table th:first-child, .conversion-table td:first-child { padding-left: 12px; }
   .levels-heading { min-height: 58px; padding: 11px 12px; }
   .levels-rows { gap: 9px; padding: 12px; }
   .level-row { grid-template-columns: 70px minmax(70px, 1fr) 68px 63px; gap: 7px; }

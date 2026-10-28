@@ -17,6 +17,8 @@ type Contract = {
 };
 
 type HistoryPoint = { time: number; close: number };
+type ChartPoint = { time: number; value: number };
+type ChartLevel = { price: number; color: string; title: string };
 
 type Chain = {
   symbol: string;
@@ -26,13 +28,22 @@ type Chain = {
   calls: Contract[];
   puts: Contract[];
   history: HistoryPoint[];
+  overnightHistory: HistoryPoint[];
   chartError: string | null;
+  overnightError: string | null;
+  previousDayHigh: number | null;
+  previousDayDate: string | null;
+  qqqPreviousDayHigh: number | null;
+  qqqPreviousDayDate: string | null;
+  futuresPreviousDayHigh: number | null;
+  futuresPreviousDayDate: string | null;
   fetchedAt: string;
 };
 
 const numberFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
 const compactFormat = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
 const percentFormat = new Intl.NumberFormat('en-US', { style: 'percent', maximumFractionDigits: 1 });
+const WALL_TOLERANCE = 0.04;
 const instruments = [
   { symbol: 'SPY', label: 'SPY', option: 'SPY · S&P 500 ETF', description: 'SPDR S&P 500 ETF Trust' },
   { symbol: 'QQQ', label: 'QQQ', option: 'QQQ · Nasdaq-100 ETF', description: 'Invesco QQQ Trust · Nasdaq-100 ETF' },
@@ -69,15 +80,107 @@ function heat(value: number, maximum: number, side: 'call' | 'put') {
   return { backgroundColor: `rgba(${color})` };
 }
 
+function PriceChart({
+  title,
+  source,
+  subtitle,
+  points,
+  levels,
+  lineColor,
+  legend,
+}: {
+  title: string;
+  source: string;
+  subtitle: string;
+  points: ChartPoint[];
+  levels: ChartLevel[];
+  lineColor: string;
+  legend: { title: string; color: string }[];
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !points.length) return;
+
+    const chart = createChart(container, {
+      width: container.clientWidth,
+      height: container.clientHeight,
+      layout: { background: { type: ColorType.Solid, color: '#151c18' }, textColor: '#829087', fontFamily: 'DM Mono, monospace', fontSize: 10 },
+      grid: { vertLines: { color: '#202a24' }, horzLines: { color: '#202a24' } },
+      rightPriceScale: { borderColor: '#2a342e', scaleMargins: { top: 0.12, bottom: 0.12 } },
+      timeScale: { borderColor: '#2a342e', timeVisible: true, secondsVisible: false },
+      crosshair: { vertLine: { color: '#617469', style: LineStyle.Dotted }, horzLine: { color: '#617469', style: LineStyle.Dotted } },
+    });
+    const priceSeries = chart.addAreaSeries({
+      lineColor,
+      topColor: `${lineColor}29`,
+      bottomColor: `${lineColor}03`,
+      lineWidth: 2,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    const chartData = points.map(({ time, value }) => ({ time: time as UTCTimestamp, value }));
+    priceSeries.setData(chartData);
+
+    if (levels.length) {
+      const allValues = [...points.map((point) => point.value), ...levels.map((level) => level.price)];
+      const scaleSeries = chart.addLineSeries({
+        color: 'rgba(0, 0, 0, 0)',
+        lineVisible: false,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      });
+      scaleSeries.setData([
+        { time: chartData[0].time, value: Math.min(...allValues) },
+        { time: chartData[chartData.length - 1].time, value: Math.max(...allValues) },
+      ]);
+    }
+    levels.forEach((level) => priceSeries.createPriceLine({
+      price: level.price,
+      color: level.color,
+      lineWidth: 1,
+      lineStyle: LineStyle.Dashed,
+      axisLabelVisible: true,
+      title: level.title,
+    }));
+    chart.timeScale().fitContent();
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      const { width, height } = entries[0].contentRect;
+      chart.applyOptions({ width, height });
+    });
+    resizeObserver.observe(container);
+    return () => {
+      resizeObserver.disconnect();
+      chart.remove();
+    };
+  }, [points, levels, lineColor]);
+
+  return (
+    <section className="chart-panel" aria-label={`${title} intraday price chart`}>
+      <div className="chart-heading">
+        <div><h2>{title} <span className="chart-source">{source}</span></h2><span className="chain-caption">{subtitle}</span></div>
+        <span className="expiry-badge">1D</span>
+      </div>
+      {points.length ? <div className="chart-canvas" ref={containerRef} /> : <div className="chart-empty">Intraday history is unavailable.</div>}
+      <div className="chart-legend">
+        {legend.map((item) => <span key={item.title}><i className="legend-dot" style={{ backgroundColor: item.color }} />{item.title}</span>)}
+      </div>
+    </section>
+  );
+}
+
 export default function App() {
   const [symbol, setSymbol] = useState('QQQ');
+  const [us100CfdHigh, setUs100CfdHigh] = useState('');
   const [chain, setChain] = useState<Chain | null>(null);
   const [expiration, setExpiration] = useState(todayExpiration());
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [updatedAt, setUpdatedAt] = useState('');
-  const chartContainerRef = useRef<HTMLDivElement>(null);
   const requestIdRef = useRef(0);
   const activeInstrument = instruments.find((instrument) => instrument.symbol === symbol);
 
@@ -113,6 +216,14 @@ export default function App() {
     void loadChain('QQQ', todayExpiration(), false);
   }, []);
 
+  useEffect(() => {
+    const refreshTimer = window.setInterval(() => {
+      void loadChain(symbol, todayExpiration(), true);
+    }, 5 * 60 * 1000);
+
+    return () => window.clearInterval(refreshTimer);
+  }, [symbol]);
+
   const strikes = useMemo(() => {
     const callMap = new Map((chain?.calls ?? []).map((contract) => [contract.strike, contract]));
     const putMap = new Map((chain?.puts ?? []).map((contract) => [contract.strike, contract]));
@@ -123,10 +234,14 @@ export default function App() {
   const price = chain?.quote.price;
   const walls = useMemo(() => {
     function strongest(contracts: Contract[], direction: 'above' | 'below') {
-      if (price === null || price === undefined) return [];
+      if (price === null || price === undefined || price <= 0) return [];
+      const minimum = price * (1 - WALL_TOLERANCE);
+      const maximum = price * (1 + WALL_TOLERANCE);
       return contracts
         .filter((contract) => Number.isFinite(contract.openInterest) && contract.openInterest > 0)
-        .filter((contract) => direction === 'above' ? contract.strike > price : contract.strike < price)
+        .filter((contract) => direction === 'above'
+          ? contract.strike > price && contract.strike <= maximum
+          : contract.strike < price && contract.strike >= minimum)
         .sort((left, right) => right.openInterest - left.openInterest || Math.abs(left.strike - price) - Math.abs(right.strike - price))
         .slice(0, 4)
         .sort((left, right) => left.strike - right.strike);
@@ -145,6 +260,16 @@ export default function App() {
   const putOi = (chain?.puts ?? []).reduce((total, item) => total + openInterest(item), 0);
   const putCallRatio = callOi ? putOi / callOi : null;
   const changePositive = (chain?.quote.changePercent ?? 0) >= 0;
+  const conversionFactor = Number(us100CfdHigh) > 0 && chain?.previousDayHigh
+    ? Number(us100CfdHigh) / chain.previousDayHigh
+    : null;
+  const qqqConversionFactor = Number(us100CfdHigh) > 0 && chain?.qqqPreviousDayHigh
+    ? Number(us100CfdHigh) / chain.qqqPreviousDayHigh
+    : null;
+  const cfdLevels = [
+    ...walls.put.map((contract, index) => ({ contract, side: 'put' as const, label: `P${index + 1}` })),
+    ...walls.call.map((contract, index) => ({ contract, side: 'call' as const, label: `C${index + 1}` })),
+  ];
   const levelValues = [...walls.put.map((wall) => wall.strike), price, ...walls.call.map((wall) => wall.strike)]
     .filter((value): value is number => value !== null && value !== undefined && Number.isFinite(value));
   const levelMinimum = levelValues.length ? Math.min(...levelValues) : 0;
@@ -154,86 +279,37 @@ export default function App() {
   const scaleMaximum = levelMaximum + levelSpan * 0.12;
   const levelPosition = (value: number) => `${((value - scaleMinimum) / (scaleMaximum - scaleMinimum)) * 100}%`;
   const wallDistance = (wall: Contract) => price ? (wall.strike / price - 1) * 100 : null;
-  const chartLevels = useMemo(() => [
+  const cfdScale = Number(us100CfdHigh) > 0 && chain?.futuresPreviousDayHigh
+    ? Number(us100CfdHigh) / chain.futuresPreviousDayHigh
+    : 1;
+  const toCfdLevel = (value: number) => conversionFactor === null || !chain?.previousDayHigh
+    ? null
+    : Number(us100CfdHigh) * value / chain.previousDayHigh;
+  const cfdChartLevels = useMemo(() => {
+    const mapped = (value: number) => conversionFactor === null || !chain?.previousDayHigh
+      ? null
+      : Number(us100CfdHigh) * value / chain.previousDayHigh;
+    return [
+      ...(conversionFactor !== null ? walls.put.flatMap((wall, index) => {
+        const mappedPrice = mapped(wall.strike);
+        return mappedPrice === null ? [] : [{ price: mappedPrice, color: '#f18270', title: `P${index + 1}` }];
+      }) : []),
+      ...(price !== null && price !== undefined && mapped(price) !== null ? [{ price: mapped(price)!, color: '#d8e2da', title: 'SPOT' }] : []),
+      ...(Number(us100CfdHigh) > 0 ? [{ price: Number(us100CfdHigh), color: '#f3c969', title: 'CFD PDH' }] : chain?.futuresPreviousDayHigh ? [{ price: chain.futuresPreviousDayHigh, color: '#f3c969', title: 'NQ PDH' }] : []),
+      ...(conversionFactor !== null ? walls.call.flatMap((wall, index) => {
+        const mappedPrice = mapped(wall.strike);
+        return mappedPrice === null ? [] : [{ price: mappedPrice, color: '#55c99b', title: `C${index + 1}` }];
+      }) : []),
+    ];
+  }, [walls, price, chain?.previousDayHigh, chain?.futuresPreviousDayHigh, conversionFactor, us100CfdHigh]);
+  const instrumentChartPoints = useMemo(() => (chain?.history ?? []).map(({ time, close }) => ({ time, value: close })), [chain?.history]);
+  const instrumentChartLevels = useMemo(() => [
     ...walls.put.map((wall, index) => ({ price: wall.strike, color: '#f18270', title: `P${index + 1}` })),
     ...(price !== null && price !== undefined ? [{ price, color: '#d8e2da', title: 'SPOT' }] : []),
+    ...(chain?.previousDayHigh ? [{ price: chain.previousDayHigh, color: '#f3c969', title: 'PDH' }] : []),
     ...walls.call.map((wall, index) => ({ price: wall.strike, color: '#55c99b', title: `C${index + 1}` })),
-  ], [walls, price]);
-  const historyPrices = (chain?.history ?? []).map((point) => point.close);
-  const historyLow = historyPrices.length ? Math.min(...historyPrices) : 0;
-  const historyHigh = historyPrices.length ? Math.max(...historyPrices) : 0;
-  const scalePadding = price ? Math.abs(price) * 0.04 : (historyHigh - historyLow) * 0.5;
-  const chartMinimum = Math.max(0, Math.min(historyLow, (price ?? historyLow) - scalePadding));
-  const chartMaximum = Math.max(historyHigh, (price ?? historyHigh) + scalePadding);
-  const visibleChartLevels = chartLevels.filter((level) => level.price >= chartMinimum && level.price <= chartMaximum);
-  const belowChartLevels = chartLevels.filter((level) => level.price < chartMinimum);
-  const aboveChartLevels = chartLevels.filter((level) => level.price > chartMaximum);
-
-  useEffect(() => {
-    const container = chartContainerRef.current;
-    if (!container || !chain?.history?.length) return;
-
-    const chart = createChart(container, {
-      width: container.clientWidth,
-      height: container.clientHeight,
-      layout: {
-        background: { type: ColorType.Solid, color: '#151c18' },
-        textColor: '#829087',
-        fontFamily: 'DM Mono, monospace',
-        fontSize: 10,
-      },
-      grid: {
-        vertLines: { color: '#202a24' },
-        horzLines: { color: '#202a24' },
-      },
-      rightPriceScale: { borderColor: '#2a342e', scaleMargins: { top: 0.12, bottom: 0.12 } },
-      timeScale: { borderColor: '#2a342e', timeVisible: true, secondsVisible: false },
-      crosshair: { vertLine: { color: '#617469', style: LineStyle.Dotted }, horzLine: { color: '#617469', style: LineStyle.Dotted } },
-    });
-    const priceSeries = chart.addAreaSeries({
-      lineColor: '#55c99b',
-      topColor: 'rgba(85, 201, 155, 0.16)',
-      bottomColor: 'rgba(85, 201, 155, 0.01)',
-      lineWidth: 2,
-      priceLineVisible: false,
-      lastValueVisible: false,
-    });
-    const chartData = chain.history.map(({ time, close }) => ({ time: time as UTCTimestamp, value: close }));
-    priceSeries.setData(chartData);
-
-    if (chartData.length && chartLevels.length) {
-      const scaleSeries = chart.addLineSeries({
-        color: 'rgba(0, 0, 0, 0)',
-        lineVisible: false,
-        priceLineVisible: false,
-        lastValueVisible: false,
-        crosshairMarkerVisible: false,
-      });
-      scaleSeries.setData([
-        { time: chartData[0].time, value: chartMinimum },
-        { time: chartData[chartData.length - 1].time, value: chartMaximum },
-      ]);
-    }
-    visibleChartLevels.forEach((level) => priceSeries.createPriceLine({
-      price: level.price,
-      color: level.color,
-      lineWidth: 1,
-      lineStyle: LineStyle.Dashed,
-      axisLabelVisible: true,
-      title: level.title,
-    }));
-    chart.timeScale().fitContent();
-
-    const resizeObserver = new ResizeObserver((entries) => {
-      const { width, height } = entries[0].contentRect;
-      chart.applyOptions({ width, height });
-    });
-    resizeObserver.observe(container);
-    return () => {
-      resizeObserver.disconnect();
-      chart.remove();
-    };
-  }, [chain?.history, chartLevels, chartMinimum, chartMaximum, visibleChartLevels]);
+  ], [walls, price, chain?.previousDayHigh]);
+  const overnightChartPoints = useMemo(() => (chain?.overnightHistory ?? []).map(({ time, close }) => ({ time, value: close * cfdScale })), [chain?.overnightHistory, cfdScale]);
 
   function selectInstrument(nextSymbol: string) {
     setSymbol(nextSymbol);
@@ -284,7 +360,7 @@ export default function App() {
         <div className="toolbar-meta">
           <span className="contract-count">{numberFormat.format(wallRows.length)} wall levels</span>
           <span className="toolbar-separator" />
-          <span>Calls + puts</span>
+          <span>AUTO · 5 MIN</span>
           <button className={`icon-button ${refreshing ? 'spinning' : ''}`} onClick={() => void loadChain(symbol, todayExpiration(), true)} title="Refresh chain and chart" aria-label="Refresh chain and chart" disabled={loading || refreshing}>
             <RefreshCw size={15} />
           </button>
@@ -314,28 +390,30 @@ export default function App() {
         </article>
       </section>
 
-      <section className="chart-panel" aria-label="QQQ intraday price chart with option levels">
-        <div className="chart-heading">
-          <div><h2>{activeInstrument?.label ?? symbol} intraday</h2><span className="chain-caption">TODAY · 5-MINUTE BARS · OPTION WALLS + SPOT</span></div>
-          <span className="expiry-badge">1D</span>
-        </div>
-        {chain?.history?.length
-          ? <div className="chart-canvas" ref={chartContainerRef} />
-          : <div className="chart-empty">{chain?.chartError || error || (loading ? 'Loading intraday prices…' : 'Intraday history is unavailable.')}</div>}
-        {(belowChartLevels.length > 0 || aboveChartLevels.length > 0) && <div className="chart-range-notes">
-          {belowChartLevels.length > 0 && <div className="range-note below-range"><span>BELOW RANGE</span>{belowChartLevels.map((level) => <b key={level.title}>{level.title} ${display(level.price)}</b>)}</div>}
-          {aboveChartLevels.length > 0 && <div className="range-note above-range"><span>ABOVE RANGE</span>{aboveChartLevels.map((level) => <b key={level.title}>{level.title} ${display(level.price)}</b>)}</div>}
-        </div>}
-        <div className="chart-legend">
-          <span><i className="legend-dot put-dot" /> PUT WALLS</span>
-          <span><i className="legend-dot spot-dot" /> SPOT</span>
-          <span><i className="legend-dot call-dot" /> CALL WALLS</span>
-        </div>
-      </section>
+      <div className="chart-pair">
+        <PriceChart
+          title={activeInstrument?.label ?? symbol}
+          source={`${symbol} · 5 MIN`}
+          subtitle="TODAY · PRE/POST-MARKET · WALLS + PDH"
+          points={instrumentChartPoints}
+          levels={instrumentChartLevels}
+          lineColor="#55c99b"
+          legend={[{ title: 'PUT WALLS', color: '#f18270' }, { title: 'SPOT', color: '#d8e2da' }, { title: 'PDH', color: '#f3c969' }, { title: 'CALL WALLS', color: '#55c99b' }]}
+        />
+        <PriceChart
+          title="US100 overnight"
+          source="NQ=F · 5 MIN"
+          subtitle="FUTURES · NORMALIZED TO CFD HIGH"
+          points={overnightChartPoints}
+          levels={cfdChartLevels}
+          lineColor="#e0ad5a"
+          legend={[{ title: 'PUT WALLS', color: '#f18270' }, { title: Number(us100CfdHigh) > 0 ? 'CFD PDH' : 'NQ PDH', color: '#f3c969' }, { title: 'CFD SPOT', color: '#d8e2da' }, { title: 'CALL WALLS', color: '#55c99b' }]}
+        />
+      </div>
 
-      <section className="levels-panel" aria-label="Option wall price levels">
+      <section className="levels-panel standalone-levels" aria-label="Option wall price levels">
         <div className="levels-heading">
-          <div><h2>Key levels</h2><span className="chain-caption">TOP 4 CALLS ABOVE · TOP 4 PUTS BELOW SPOT BY OPEN INTEREST</span></div>
+          <div><h2>Key levels</h2><span className="chain-caption">TOP 4 CALLS + PUTS WITHIN ±4% SPOT · BY OPEN INTEREST</span></div>
           <span className="levels-symbol">{chain?.symbol ?? symbol} · {expiration ? expirationLabel(Number(expiration)) : '—'}</span>
         </div>
         <div className="levels-rows">
@@ -360,9 +438,50 @@ export default function App() {
         </div>
       </section>
 
+      <section className="cfd-panel" aria-label="US100 CFD wall conversion">
+        <div className="cfd-heading">
+          <div><h2>US100 CFD conversion</h2><span className="chain-caption">MAP OPTION LEVELS FROM THE PREVIOUS SESSION HIGH</span></div>
+          <span className="expiry-badge">{activeInstrument?.label ?? symbol} · 0DTE</span>
+        </div>
+        <div className="cfd-inputs">
+          <label className="cfd-anchor-input">
+            <span className="metric-label">YOUR US100 CFD · PREVIOUS HIGH</span>
+            <div className="number-input-wrap"><span>US100</span><input aria-label="US100 CFD previous-day high" type="number" min="0" step="0.1" inputMode="decimal" placeholder="Enter yesterday high" value={us100CfdHigh} onChange={(event) => setUs100CfdHigh(event.target.value)} /></div>
+          </label>
+          <div className="reference-high">
+            <span className="metric-label">{activeInstrument?.label ?? symbol} · PREVIOUS SESSION HIGH</span>
+            <strong>{chain?.previousDayHigh ? `$${display(chain.previousDayHigh)}` : '—'}</strong>
+            <span>{chain?.previousDayDate ?? 'Waiting for daily data'}</span>
+          </div>
+          <div className="reference-high qqq-reference-high">
+            <span className="metric-label">QQQ · PREVIOUS SESSION HIGH</span>
+            <strong>{chain?.qqqPreviousDayHigh ? `$${display(chain.qqqPreviousDayHigh)}` : '—'}</strong>
+            <span>{chain?.qqqPreviousDayDate ?? 'Waiting for daily data'} · {qqqConversionFactor ? `×${display(qqqConversionFactor, 3)}` : 'enter CFD high'}</span>
+          </div>
+          <p className="conversion-formula">US100 level = your CFD high × option strike ÷ selected instrument's previous-session high. NQ=F is normalized to the same CFD high.</p>
+        </div>
+        <div className="conversion-table-wrap">
+          <table className="conversion-table">
+            <thead><tr><th>LEVEL</th><th>OPTION STRIKE</th><th>VS PREV. HIGH</th><th>US100 CFD LEVEL</th></tr></thead>
+            <tbody>
+              {cfdLevels.length ? cfdLevels.map(({ contract, side, label }) => {
+                const convertedLevel = toCfdLevel(contract.strike);
+                const relativeToHigh = chain?.previousDayHigh ? (contract.strike / chain.previousDayHigh - 1) * 100 : null;
+                return <tr key={label}>
+                  <td className={side === 'put' ? 'put-conversion' : 'call-conversion'}>{label}</td>
+                  <td>{display(contract.strike)}</td>
+                  <td>{relativeToHigh === null ? '—' : `${display(relativeToHigh)}%`}</td>
+                  <td className="converted-level">{convertedLevel === null ? 'Enter CFD high' : display(convertedLevel)}</td>
+                </tr>;
+              }) : <tr><td className="conversion-empty" colSpan={4}>No 0DTE wall levels for this instrument today.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       <section className="chain-panel" aria-label="Options chain">
         <div className="chain-heading">
-          <div><h2>Wall strikes</h2><span className="chain-caption">4 CALL STRIKES ABOVE SPOT · 4 PUT STRIKES BELOW SPOT</span></div>
+          <div><h2>Wall strikes</h2><span className="chain-caption">TOP 4 CALLS ABOVE · TOP 4 PUTS BELOW · WITHIN ±4% SPOT</span></div>
           <span className="expiry-badge">{expiration ? expirationLabel(Number(expiration)) : 'SELECT EXPIRATION'}</span>
         </div>
         <div className="table-scroll">
