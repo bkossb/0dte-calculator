@@ -19,7 +19,7 @@ type Contract = {
 type HistoryPoint = { time: number; close: number };
 type ChartPoint = { time: number; value: number };
 type ChartLevel = { price: number; color: string; title: string };
-type ConfirmationChain = { symbol: string; price: number | null; calls: Contract[]; puts: Contract[] };
+type ConfirmationChain = { symbol: string; price: number | null; calls: Contract[]; puts: Contract[]; history: HistoryPoint[] };
 type WallConfluence = {
   contract: Contract;
   side: 'put' | 'call';
@@ -98,6 +98,20 @@ function heat(value: number, maximum: number, side: 'call' | 'put') {
   const intensity = maximum > 0 ? Math.sqrt(value / maximum) : 0;
   const color = side === 'call' ? `37, 178, 129, ${intensity * 0.2}` : `237, 105, 86, ${intensity * 0.2}`;
   return { backgroundColor: `rgba(${color})` };
+}
+
+function selectWallContracts(contracts: Contract[], spot: number | null, direction: 'above' | 'below') {
+  if (spot === null || spot <= 0) return [];
+  const minimum = spot * (1 - WALL_TOLERANCE);
+  const maximum = spot * (1 + WALL_TOLERANCE);
+  return contracts
+    .filter((contract) => Number.isFinite(contract.openInterest) && contract.openInterest > 0)
+    .filter((contract) => direction === 'above'
+      ? contract.strike > spot && contract.strike <= maximum
+      : contract.strike < spot && contract.strike >= minimum)
+    .sort((left, right) => right.openInterest - left.openInterest || Math.abs(left.strike - spot) - Math.abs(right.strike - spot))
+    .slice(0, 4)
+    .sort((left, right) => left.strike - right.strike);
 }
 
 function PriceChart({
@@ -259,25 +273,16 @@ export default function App() {
 
   const price = chain?.quote.price;
   const walls = useMemo(() => {
-    function strongest(contracts: Contract[], direction: 'above' | 'below') {
-      if (price === null || price === undefined || price <= 0) return [];
-      const minimum = price * (1 - WALL_TOLERANCE);
-      const maximum = price * (1 + WALL_TOLERANCE);
-      return contracts
-        .filter((contract) => Number.isFinite(contract.openInterest) && contract.openInterest > 0)
-        .filter((contract) => direction === 'above'
-          ? contract.strike > price && contract.strike <= maximum
-          : contract.strike < price && contract.strike >= minimum)
-        .sort((left, right) => right.openInterest - left.openInterest || Math.abs(left.strike - price) - Math.abs(right.strike - price))
-        .slice(0, 4)
-        .sort((left, right) => left.strike - right.strike);
-    }
-
     return {
-      call: strongest(chain?.calls ?? [], 'above'),
-      put: strongest(chain?.puts ?? [], 'below'),
+      call: selectWallContracts(chain?.calls ?? [], price ?? null, 'above'),
+      put: selectWallContracts(chain?.puts ?? [], price ?? null, 'below'),
     };
   }, [chain, price]);
+  const confirmationPrice = chain?.confirmation?.price ?? null;
+  const confirmationWalls = useMemo(() => ({
+    call: selectWallContracts(chain?.confirmation?.calls ?? [], confirmationPrice, 'above'),
+    put: selectWallContracts(chain?.confirmation?.puts ?? [], confirmationPrice, 'below'),
+  }), [chain?.confirmation, confirmationPrice]);
   const wallStrikes = new Set([...walls.call, ...walls.put].map((wall) => wall.strike));
   const wallRows = strikes.filter((row) => wallStrikes.has(row.strike));
   const openInterest = (contract: Contract) => Number.isFinite(contract.openInterest) ? contract.openInterest : 0;
@@ -373,6 +378,12 @@ export default function App() {
     ...(chain?.previousDayHigh ? [{ price: chain.previousDayHigh, color: '#f3c969', title: 'PDH' }] : []),
     ...wallConfluence.filter((wall) => wall.side === 'call').map((wall) => ({ price: wall.consensusStrike, color: '#55c99b', title: wall.confirmation ? `${wall.label} CONF` : wall.label })),
   ], [wallConfluence, price, chain?.previousDayHigh]);
+  const confirmationChartPoints = useMemo(() => (chain?.confirmation?.history ?? []).map(({ time, close }) => ({ time, value: close })), [chain?.confirmation?.history]);
+  const confirmationChartLevels = useMemo(() => [
+    ...confirmationWalls.put.map((wall, index) => ({ price: wall.strike, color: '#f18270', title: `P${index + 1}` })),
+    ...(confirmationPrice !== null ? [{ price: confirmationPrice, color: '#d8e2da', title: 'SPOT' }] : []),
+    ...confirmationWalls.call.map((wall, index) => ({ price: wall.strike, color: '#55c99b', title: `C${index + 1}` })),
+  ], [confirmationWalls, confirmationPrice]);
   const overnightChartPoints = useMemo(() => (chain?.overnightHistory ?? []).map(({ time, close }) => ({ time, value: close * cfdScale })), [chain?.overnightHistory, cfdScale]);
 
   function selectInstrument(nextSymbol: string) {
@@ -449,6 +460,15 @@ export default function App() {
       </section>
 
       <div className="chart-pair">
+        {chain?.confirmation && chain.confirmation.symbol === chain.referenceSymbol && confirmationChartPoints.length > 0 && <PriceChart
+          title={instruments.find((instrument) => instrument.symbol === chain.confirmation?.symbol)?.label ?? chain.confirmation.symbol}
+          source={`${chain.confirmation.symbol} · 5 MIN`}
+          subtitle="PEER · SAME-DAY OPTIONS + SPOT"
+          points={confirmationChartPoints}
+          levels={confirmationChartLevels}
+          lineColor="#72bda5"
+          legend={[{ title: 'PUT WALLS', color: '#f18270' }, { title: 'SPOT', color: '#d8e2da' }, { title: 'CALL WALLS', color: '#55c99b' }]}
+        />}
         <PriceChart
           title={activeInstrument?.label ?? symbol}
           source={`${symbol} · 5 MIN`}
@@ -458,6 +478,15 @@ export default function App() {
           lineColor="#55c99b"
           legend={[{ title: 'PUT WALLS', color: '#f18270' }, { title: 'SPOT', color: '#d8e2da' }, { title: 'PDH', color: '#f3c969' }, { title: 'CALL WALLS', color: '#55c99b' }]}
         />
+        {chain?.confirmation && chain.confirmation.symbol !== chain.referenceSymbol && confirmationChartPoints.length > 0 && <PriceChart
+          title={instruments.find((instrument) => instrument.symbol === chain.confirmation?.symbol)?.label ?? chain.confirmation.symbol}
+          source={`${chain.confirmation.symbol} · 5 MIN`}
+          subtitle="PEER · SAME-DAY OPTIONS + SPOT"
+          points={confirmationChartPoints}
+          levels={confirmationChartLevels}
+          lineColor="#72bda5"
+          legend={[{ title: 'PUT WALLS', color: '#f18270' }, { title: 'SPOT', color: '#d8e2da' }, { title: 'CALL WALLS', color: '#55c99b' }]}
+        />}
         <PriceChart
           title={`${cfdSymbol} overnight`}
           source={`${futuresSymbol} · 5 MIN`}
@@ -466,7 +495,6 @@ export default function App() {
           levels={cfdChartLevels}
           lineColor="#e0ad5a"
           legend={[{ title: 'PUT WALLS', color: '#f18270' }, { title: cfdHigh > 0 ? `${cfdSymbol} PDH` : `${futuresSymbol} PDH`, color: '#f3c969' }, { title: `${cfdSymbol} SPOT`, color: '#d8e2da' }, { title: 'CALL WALLS', color: '#55c99b' }]}
-          size="featured"
         />
       </div>
 

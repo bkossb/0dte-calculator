@@ -146,17 +146,31 @@ export default async function handler(request, response) {
       const confirmationUrl = new URL(`https://query1.finance.yahoo.com/v7/finance/options/${encodeURIComponent(market.confirmationSymbol)}`);
       confirmationUrl.searchParams.set('date', String(selectedOptions.expirationDate));
       confirmationUrl.searchParams.set('crumb', crumb);
-      const confirmationResponse = await fetch(confirmationUrl, { headers: requestHeaders }).catch(() => null);
-      const confirmationPayload = confirmationResponse?.ok ? await confirmationResponse.json().catch(() => null) : null;
+      const confirmationChartUrl = new URL(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(market.confirmationSymbol)}`);
+      confirmationChartUrl.searchParams.set('range', range);
+      confirmationChartUrl.searchParams.set('interval', CHART_RANGES[range]);
+      confirmationChartUrl.searchParams.set('includePrePost', 'true');
+      const [confirmationResponse, confirmationChartResponse] = await Promise.all([
+        fetch(confirmationUrl, { headers: requestHeaders }).catch(() => null),
+        fetch(confirmationChartUrl, { headers: requestHeaders }).catch(() => null),
+      ]);
+      const [confirmationPayload, confirmationChartPayload] = await Promise.all([
+        confirmationResponse?.ok ? confirmationResponse.json().catch(() => null) : null,
+        confirmationChartResponse?.ok ? confirmationChartResponse.json().catch(() => null) : null,
+      ]);
       const confirmationResult = confirmationPayload?.optionChain?.result?.[0];
       const confirmationOptions = confirmationResult?.options?.find((options) => options.expirationDate === selectedOptions.expirationDate && hasContracts(options));
 
       if (confirmationOptions) {
+        const peerChart = confirmationChartPayload?.chart?.result?.[0];
+        const peerTimestamps = peerChart?.timestamp ?? [];
+        const peerCloses = peerChart?.indicators?.quote?.[0]?.close ?? [];
         confirmation = {
           symbol: market.confirmationSymbol,
           price: confirmationResult.quote?.regularMarketPrice ?? null,
           calls: confirmationOptions.calls ?? [],
           puts: confirmationOptions.puts ?? [],
+          history: peerTimestamps.flatMap((time, index) => Number.isFinite(peerCloses[index]) ? [{ time, close: peerCloses[index] }] : []),
         };
       } else {
         confirmationWarning = `Brak chainu ${market.confirmationSymbol} dla tego samego terminu.`;
