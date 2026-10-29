@@ -7,7 +7,7 @@ const INSTRUMENT_MARKETS = {
   QQQ: { cfdSymbol: 'US100', futuresSymbol: 'NQ=F', referenceSymbol: 'QQQ', confirmationSymbol: '^NDX', gexMultiplier: 100 },
   '^NDX': { cfdSymbol: 'US100', futuresSymbol: 'NQ=F', referenceSymbol: 'QQQ', confirmationSymbol: 'QQQ', gexMultiplier: 100 },
   '^SPX': { cfdSymbol: 'US500', futuresSymbol: 'ES=F', referenceSymbol: 'SPY', confirmationSymbol: 'SPY', gexMultiplier: 100 },
-  DIA: { cfdSymbol: 'US30', futuresSymbol: 'YM=F', referenceSymbol: 'DIA', confirmationSymbol: '^DJI', gexMultiplier: 100 },
+  DIA: { cfdSymbol: 'US30', futuresSymbol: 'YM=F', referenceSymbol: 'DIA', confirmationSymbol: '^DJI', confirmationQuoteWithoutOptions: true, gexMultiplier: 100 },
   GLD: { cfdSymbol: 'XAUUSD', futuresSymbol: 'GC=F', referenceSymbol: 'GLD', gexMultiplier: 100 },
   '^GDAXI': { cfdSymbol: 'DE40', futuresSymbol: 'FDAX', referenceSymbol: '^GDAXI', eurexProductId: 3734540, eurexContractType: 'weekly', tvFuturesSymbol: 'EUREX:FDAX1!', gexMultiplier: 5 },
 };
@@ -516,9 +516,10 @@ export default async function handler(request, response) {
 
     let confirmation = null;
     let confirmationWarning = null;
-    if (market.confirmationSymbol && selectedOptions?.expirationDate) {
+    let confirmationDailyResult = null;
+    if (market.confirmationSymbol && (selectedOptions?.expirationDate || market.confirmationQuoteWithoutOptions)) {
       const confirmationUrl = new URL(`https://query1.finance.yahoo.com/v7/finance/options/${encodeURIComponent(market.confirmationSymbol)}`);
-      confirmationUrl.searchParams.set('date', String(selectedOptions.expirationDate));
+      if (selectedOptions?.expirationDate) confirmationUrl.searchParams.set('date', String(selectedOptions.expirationDate));
       const confirmationChartUrl = new URL(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(market.confirmationSymbol)}`);
       confirmationChartUrl.searchParams.set('range', range);
       confirmationChartUrl.searchParams.set('interval', CHART_RANGES[range]);
@@ -528,7 +529,7 @@ export default async function handler(request, response) {
       confirmationDailyUrl.searchParams.set('range', '5d');
       confirmationDailyUrl.searchParams.set('interval', '1d');
       const [confirmationResponse, confirmationChartResponse, confirmationDailyResponse] = await Promise.all([
-        fetchYahooOptions(confirmationUrl).catch(() => null),
+        selectedOptions?.expirationDate ? fetchYahooOptions(confirmationUrl).catch(() => null) : null,
         fetch(confirmationChartUrl, { headers: requestHeaders }).catch(() => null),
         sharesReferenceDaily ? null : fetch(confirmationDailyUrl, { headers: requestHeaders }).catch(() => null),
       ]);
@@ -538,23 +539,33 @@ export default async function handler(request, response) {
         confirmationDailyResponse?.ok ? confirmationDailyResponse.json().catch(() => null) : null,
       ]);
       const confirmationResult = confirmationPayload?.optionChain?.result?.[0];
-      const confirmationOptions = confirmationResult?.options?.find((options) => options.expirationDate === selectedOptions.expirationDate && hasContracts(options));
+      const confirmationOptions = confirmationResult?.options?.find((options) => options.expirationDate === selectedOptions?.expirationDate && hasContracts(options));
 
       const peerChart = confirmationChartPayload?.chart?.result?.[0];
       const peerTimestamps = peerChart?.timestamp ?? [];
       const peerCloses = peerChart?.indicators?.quote?.[0]?.close ?? [];
       const peerHistory = peerTimestamps.flatMap((time, index) => Number.isFinite(peerCloses[index]) ? [{ time, close: peerCloses[index] }] : []);
-      const confirmationDailyResult = sharesReferenceDaily
+      confirmationDailyResult = sharesReferenceDaily
         ? (symbol === market.referenceSymbol ? dailyPayload : referenceDailyPayload)?.chart?.result?.[0]
         : confirmationDailyPayload?.chart?.result?.[0];
       const confirmationPreviousSession = previousSession(confirmationDailyResult);
-      const peerPrice = confirmationResult?.quote?.regularMarketPrice ?? peerChart?.meta?.regularMarketPrice ?? null;
+      const peerPrice = market.confirmationQuoteWithoutOptions
+        ? peerChart?.meta?.regularMarketPrice ?? null
+        : confirmationResult?.quote?.regularMarketPrice ?? peerChart?.meta?.regularMarketPrice ?? null;
+      const peerPreviousClose = confirmationPreviousSession?.close
+        ?? (market.confirmationQuoteWithoutOptions ? peerChart?.meta?.previousClose : null)
+        ?? confirmationResult?.quote?.regularMarketPreviousClose
+        ?? null;
+      const peerChangePercent = Number.isFinite(peerPrice) && Number.isFinite(peerPreviousClose) && peerPreviousClose !== 0
+        ? (peerPrice / peerPreviousClose - 1) * 100
+        : null;
 
-      if (confirmationOptions || peerHistory.length) {
+      if (confirmationOptions || peerHistory.length || (market.confirmationQuoteWithoutOptions && (peerPrice !== null || todaySession(confirmationDailyResult)))) {
         confirmation = {
           symbol: market.confirmationSymbol,
           price: peerPrice,
-          previousClose: confirmationPreviousSession?.close ?? confirmationResult?.quote?.regularMarketPreviousClose ?? null,
+          changePercent: peerChangePercent,
+          previousClose: peerPreviousClose,
           previousDayHigh: confirmationPreviousSession?.high ?? null,
           calls: confirmationOptions?.calls ?? [],
           puts: confirmationOptions?.puts ?? [],
@@ -619,9 +630,9 @@ export default async function handler(request, response) {
       todayOpen: todaySession(dailyPayload?.chart?.result?.[0])?.open ?? null,
       todayHigh: todaySession(dailyPayload?.chart?.result?.[0])?.high ?? null,
       todayLow: todaySession(dailyPayload?.chart?.result?.[0])?.low ?? null,
-      confirmationTodayOpen: confirmation ? todaySession(confirmationDailyPayload?.chart?.result?.[0])?.open ?? null : null,
-      confirmationTodayHigh: confirmation ? todaySession(confirmationDailyPayload?.chart?.result?.[0])?.high ?? null : null,
-      confirmationTodayLow: confirmation ? todaySession(confirmationDailyPayload?.chart?.result?.[0])?.low ?? null : null,
+      confirmationTodayOpen: confirmation ? todaySession(confirmationDailyResult)?.open ?? null : null,
+      confirmationTodayHigh: confirmation ? todaySession(confirmationDailyResult)?.high ?? null : null,
+      confirmationTodayLow: confirmation ? todaySession(confirmationDailyResult)?.low ?? null : null,
       referencePreviousDayHigh: referencePreviousSession?.high ?? null,
       referencePreviousDayDate: referencePreviousSession?.date ?? null,
       futuresPreviousDayHigh: futuresPreviousSession?.high ?? null,
@@ -633,7 +644,8 @@ export default async function handler(request, response) {
       gex,
       fetchedAt: new Date().toISOString(),
     });
-  } catch {
+  } catch (error) {
+    console.error('Yahoo Finance request failed:', error);
     return response.status(502).json({ error: 'Nie udało się połączyć z Yahoo Finance.' });
   }
 }

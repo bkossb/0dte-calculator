@@ -98,7 +98,13 @@ export default function App() {
   const optionsUnavailableMessage = chain?.optionsError
     ? `${chain.optionsError}${chain.expirations[0] ? ` Najbliższy termin: ${expirationLabel(chain.expirations[0])}.` : ''}`
     : '';
-  const changePositive = (chain?.quote.changePercent ?? 0) >= 0;
+  const headerQuoteSymbol = activeInstrument?.headerQuoteSymbol;
+  const headerPrice = headerQuoteSymbol ? chain?.confirmation?.price : price;
+  const headerChangePercent = headerQuoteSymbol ? chain?.confirmation?.changePercent : chain?.quote.changePercent;
+  const headerTodayOpen = headerQuoteSymbol ? chain?.confirmationTodayOpen : chain?.todayOpen;
+  const headerTodayHigh = headerQuoteSymbol ? chain?.confirmationTodayHigh : chain?.todayHigh;
+  const headerTodayLow = headerQuoteSymbol ? chain?.confirmationTodayLow : chain?.todayLow;
+  const changePositive = (headerChangePercent ?? 0) >= 0;
   const currencySymbol = chain?.quote.currency === 'EUR' ? '€' : '$';
   const cfdToUnderlyingFactor = cfdHigh > 0 && chain?.previousDayHigh
     ? cfdHigh / chain.previousDayHigh
@@ -221,22 +227,23 @@ export default function App() {
           <div className="title-row">
             <h1>{activeInstrument?.label ?? symbol}</h1>
             <span className="exchange-tag">{activeInstrument?.exchange ?? 'US EQUITY'}</span>
-            {price !== null && price !== undefined && <span className="price">{currencySymbol}{display(price)}</span>}
-            {chain?.quote.changePercent !== null && chain?.quote.changePercent !== undefined && (
+            {headerQuoteSymbol && <span className="exchange-tag">{headerQuoteSymbol}</span>}
+            {(headerQuoteSymbol || (headerPrice !== null && headerPrice !== undefined)) && <span className="price">{headerPrice === null || headerPrice === undefined ? '—' : `${currencySymbol}${display(headerPrice)}`}</span>}
+            {headerChangePercent !== null && headerChangePercent !== undefined && (
               <span className={`price-change ${changePositive ? 'positive' : 'negative'}`}>
-                {changePositive ? <ArrowUp size={13} /> : <ArrowDown size={13} />}{display(Math.abs(chain.quote.changePercent), 2)}%
+                {changePositive ? <ArrowUp size={13} /> : <ArrowDown size={13} />}{display(Math.abs(headerChangePercent), 2)}%
               </span>
             )}
           </div>
           <p className="instrument-subtitle">{activeInstrument?.description ?? symbol}</p>
-          {(chain?.todayOpen !== null && chain?.todayOpen !== undefined) && (
+          {(headerQuoteSymbol || (headerTodayOpen !== null && headerTodayOpen !== undefined)) && (
             <div className="session-stats">
-              <span>O <strong>{currencySymbol}{display(chain.todayOpen)}</strong></span>
-              <span>H <strong>{currencySymbol}{display(chain.todayHigh)}</strong></span>
-              <span>L <strong>{currencySymbol}{display(chain.todayLow)}</strong></span>
+              <span>O <strong>{headerTodayOpen == null ? '—' : `${currencySymbol}${display(headerTodayOpen)}`}</strong></span>
+              <span>H <strong>{headerTodayHigh == null ? '—' : `${currencySymbol}${display(headerTodayHigh)}`}</strong></span>
+              <span>L <strong>{headerTodayLow == null ? '—' : `${currencySymbol}${display(headerTodayLow)}`}</strong></span>
             </div>
           )}
-          {chain?.confirmation && chain.confirmationTodayOpen !== null && chain.confirmationTodayOpen !== undefined && (
+          {!headerQuoteSymbol && chain?.confirmation && chain.confirmationTodayOpen !== null && chain.confirmationTodayOpen !== undefined && (
             <div className="session-stats session-stats-confirmation">
               <span>{chain.confirmation.symbol} O <strong>{currencySymbol}{display(chain.confirmationTodayOpen)}</strong></span>
               <span>H <strong>{currencySymbol}{display(chain.confirmationTodayHigh)}</strong></span>

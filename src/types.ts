@@ -15,7 +15,7 @@ export type Contract = {
 export type HistoryPoint = { time: number; close: number };
 export type ChartPoint = { time: number; value: number };
 export type ChartLevel = { price: number; color: string; title: string };
-export type ConfirmationChain = { symbol: string; price: number | null; previousClose: number | null; previousDayHigh: number | null; calls: Contract[]; puts: Contract[]; history: HistoryPoint[] };
+export type ConfirmationChain = { symbol: string; price: number | null; changePercent: number | null; previousClose: number | null; previousDayHigh: number | null; calls: Contract[]; puts: Contract[]; history: HistoryPoint[] };
 export type WallConfluence = {
   contract: Contract;
   side: 'put' | 'call';
