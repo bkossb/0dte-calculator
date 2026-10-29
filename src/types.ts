@@ -1,0 +1,71 @@
+export type Contract = {
+  contractSymbol: string;
+  strike: number;
+  lastPrice: number;
+  bid: number;
+  ask: number;
+  change: number;
+  percentChange: number;
+  volume: number;
+  openInterest: number;
+  impliedVolatility: number;
+  inTheMoney: boolean;
+};
+
+export type HistoryPoint = { time: number; close: number };
+export type ChartPoint = { time: number; value: number };
+export type ChartLevel = { price: number; color: string; title: string };
+export type ConfirmationChain = { symbol: string; price: number | null; previousClose: number | null; previousDayHigh: number | null; calls: Contract[]; puts: Contract[]; history: HistoryPoint[] };
+export type WallConfluence = {
+  contract: Contract;
+  side: 'put' | 'call';
+  label: string;
+  offsetPct: number;
+  consensusOffsetPct: number;
+  consensusStrike: number;
+  confirmation: Contract | null;
+  confirmationOffsetPct: number | null;
+};
+
+export type Chain = {
+  symbol: string;
+  cfdSymbol: string;
+  futuresSymbol: string;
+  referenceSymbol: string;
+  quote: { price: number | null; previousClose: number | null; changePercent: number | null; currency: string };
+  expirations: number[];
+  selectedExpiration: number | null;
+  isNearestExpiration: boolean;
+  calls: Contract[];
+  puts: Contract[];
+  confirmationSymbol: string | null;
+  confirmation: ConfirmationChain | null;
+  confirmationWarning: string | null;
+  optionsError: string | null;
+  optionsWarning: string | null;
+  history: HistoryPoint[];
+  overnightHistory: HistoryPoint[];
+  chartError: string | null;
+  overnightError: string | null;
+  previousDayHigh: number | null;
+  previousDayClose: number | null;
+  previousDayDate: string | null;
+  todayOpen: number | null;
+  todayHigh: number | null;
+  todayLow: number | null;
+  referencePreviousDayHigh: number | null;
+  referencePreviousDayDate: string | null;
+  futuresPreviousDayHigh: number | null;
+  futuresPreviousDayClose: number | null;
+  futuresPreviousDayDate: string | null;
+  sessionOpenRatio: number | null;
+  gex: {
+    forward: number;
+    timeYears: number;
+    gammaFlip: number | null;
+    callWall: { strike: number; gex: number; openInterest: number } | null;
+    putWall: { strike: number; gex: number; openInterest: number } | null;
+    topByGex: { strike: number; side: 'call' | 'put'; gex: number; openInterest: number; impliedVolatility: number }[];
+  } | null;
+  fetchedAt: string;
+};

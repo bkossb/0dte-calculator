@@ -3,13 +3,13 @@ import WebSocket from 'ws';
 const SYMBOL_PATTERN = /^[A-Z0-9.^=-]{1,15}$/;
 const CHART_RANGES = { '1d': '5m' };
 const INSTRUMENT_MARKETS = {
-  SPY: { cfdSymbol: 'US500', futuresSymbol: 'ES=F', referenceSymbol: 'SPY', confirmationSymbol: '^SPX' },
-  QQQ: { cfdSymbol: 'US100', futuresSymbol: 'NQ=F', referenceSymbol: 'QQQ', confirmationSymbol: '^NDX' },
-  '^NDX': { cfdSymbol: 'US100', futuresSymbol: 'NQ=F', referenceSymbol: 'QQQ', confirmationSymbol: 'QQQ' },
-  '^SPX': { cfdSymbol: 'US500', futuresSymbol: 'ES=F', referenceSymbol: 'SPY', confirmationSymbol: 'SPY' },
-  DIA: { cfdSymbol: 'US30', futuresSymbol: 'YM=F', referenceSymbol: 'DIA' },
-  GLD: { cfdSymbol: 'XAUUSD', futuresSymbol: 'GC=F', referenceSymbol: 'GLD' },
-  '^GDAXI': { cfdSymbol: 'DE40', futuresSymbol: 'FDAX', referenceSymbol: '^GDAXI', eurexProductId: 3734540, eurexContractType: 'weekly', tvFuturesSymbol: 'EUREX:FDAX1!' },
+  SPY: { cfdSymbol: 'US500', futuresSymbol: 'ES=F', referenceSymbol: 'SPY', confirmationSymbol: '^SPX', gexMultiplier: 100 },
+  QQQ: { cfdSymbol: 'US100', futuresSymbol: 'NQ=F', referenceSymbol: 'QQQ', confirmationSymbol: '^NDX', gexMultiplier: 100 },
+  '^NDX': { cfdSymbol: 'US100', futuresSymbol: 'NQ=F', referenceSymbol: 'QQQ', confirmationSymbol: 'QQQ', gexMultiplier: 100 },
+  '^SPX': { cfdSymbol: 'US500', futuresSymbol: 'ES=F', referenceSymbol: 'SPY', confirmationSymbol: 'SPY', gexMultiplier: 100 },
+  DIA: { cfdSymbol: 'US30', futuresSymbol: 'YM=F', referenceSymbol: 'DIA', gexMultiplier: 100 },
+  GLD: { cfdSymbol: 'XAUUSD', futuresSymbol: 'GC=F', referenceSymbol: 'GLD', gexMultiplier: 100 },
+  '^GDAXI': { cfdSymbol: 'DE40', futuresSymbol: 'FDAX', referenceSymbol: '^GDAXI', eurexProductId: 3734540, eurexContractType: 'weekly', tvFuturesSymbol: 'EUREX:FDAX1!', gexMultiplier: 5 },
 };
 const YAHOO_HEADERS = { 'User-Agent': 'Mozilla/5.0 (compatible; OptionsDesk/1.0)' };
 const EUREX_HEADERS = { 'User-Agent': 'Mozilla/5.0 (compatible; OptionsDesk/1.0)' };
@@ -34,6 +34,19 @@ function previousSession(dailyResult, timeZone = 'America/New_York') {
     .map((time, index) => ({ time, high: highs[index], close: closes[index], date: zonedDate(time, timeZone) }))
     .filter((bar) => bar.date < today && Number.isFinite(bar.high))
     .at(-1) ?? null;
+}
+
+function todaySession(dailyResult, timeZone = 'America/New_York') {
+  const timestamps = dailyResult?.timestamp ?? [];
+  const quote = dailyResult?.indicators?.quote?.[0] ?? {};
+  const today = zonedDate(Date.now() / 1000, timeZone);
+  const index = timestamps.findIndex((time) => zonedDate(time, timeZone) === today);
+  if (index < 0) return null;
+  const open = quote.open?.[index];
+  const high = quote.high?.[index];
+  const low = quote.low?.[index];
+  if (!Number.isFinite(open) && !Number.isFinite(high) && !Number.isFinite(low)) return null;
+  return { open: open ?? null, high: high ?? null, low: low ?? null };
 }
 
 async function getYahooSession() {
@@ -197,21 +210,24 @@ function black76Gamma(forward, strike, timeYears, sigma) {
   return normPdf(d1) / (forward * sigma * Math.sqrt(timeYears));
 }
 
-const ODAP_MULTIPLIER = 5;
-
-function computeGex(calls, puts, forward, timeYears) {
-  if (!Number.isFinite(forward) || forward <= 0 || timeYears <= 0) return null;
+function computeGex(calls, puts, forward, timeYears, multiplier) {
+  if (!Number.isFinite(forward) || forward <= 0 || timeYears <= 0 || !Number.isFinite(multiplier)) return null;
   const rows = [];
   for (const [side, contracts] of [['call', calls], ['put', puts]]) {
     for (const contract of contracts) {
       if (!Number.isFinite(contract.openInterest) || contract.openInterest <= 0) continue;
-      const settle = Number.isFinite(contract.lastPrice) ? contract.lastPrice : NaN;
-      const sigma = black76ImpliedVol(side, settle, forward, contract.strike, timeYears);
+      let sigma = Number.isFinite(contract.impliedVolatility) && contract.impliedVolatility > 0
+        ? contract.impliedVolatility
+        : NaN;
+      if (!Number.isFinite(sigma)) {
+        const settle = Number.isFinite(contract.lastPrice) ? contract.lastPrice : NaN;
+        sigma = black76ImpliedVol(side, settle, forward, contract.strike, timeYears);
+      }
       if (!Number.isFinite(sigma)) continue;
       const gamma = black76Gamma(forward, contract.strike, timeYears, sigma);
       if (!Number.isFinite(gamma)) continue;
       const sign = side === 'call' ? 1 : -1;
-      const gex = sign * gamma * contract.openInterest * ODAP_MULTIPLIER * forward * forward * 0.01;
+      const gex = sign * gamma * contract.openInterest * multiplier * forward * forward * 0.01;
       rows.push({ strike: contract.strike, side, gex, openInterest: contract.openInterest, impliedVolatility: sigma });
     }
   }
@@ -352,7 +368,7 @@ async function handleEurexChain(request, response, symbol, market, range) {
     if (forward && selectedDate) {
       const expiryUtc = Date.UTC(Number(selectedDate.slice(0, 4)), Number(selectedDate.slice(4, 6)) - 1, Number(selectedDate.slice(6, 8)), 16, 30);
       const timeYears = Math.max((expiryUtc - Date.now()) / (365.25 * 24 * 60 * 60 * 1000), 1 / (365.25 * 24 * 12));
-      gex = computeGex(calls, puts, forward, timeYears);
+      gex = computeGex(calls, puts, forward, timeYears, market.gexMultiplier);
     }
 
     response.setHeader('Cache-Control', 'no-store');
@@ -383,6 +399,9 @@ async function handleEurexChain(request, response, symbol, market, range) {
       previousDayHigh: selectedPreviousSession?.high ?? null,
       previousDayClose: selectedPreviousSession?.close ?? null,
       previousDayDate: selectedPreviousSession?.date ?? null,
+      todayOpen: todaySession(dailyPayload?.chart?.result?.[0], EUREX_TIME_ZONE)?.open ?? null,
+      todayHigh: todaySession(dailyPayload?.chart?.result?.[0], EUREX_TIME_ZONE)?.high ?? null,
+      todayLow: todaySession(dailyPayload?.chart?.result?.[0], EUREX_TIME_ZONE)?.low ?? null,
       referencePreviousDayHigh: selectedPreviousSession?.high ?? null,
       referencePreviousDayDate: selectedPreviousSession?.date ?? null,
       futuresPreviousDayHigh: futuresPreviousDayHigh,
@@ -557,6 +576,14 @@ export default async function handler(request, response) {
     const overnightCloses = overnightResult?.indicators?.quote?.[0]?.close ?? [];
     const overnightHistory = overnightTimestamps.flatMap((time, index) => Number.isFinite(overnightCloses[index]) ? [{ time, close: overnightCloses[index] }] : []);
 
+    const forward = overnightHistory.at(-1)?.close ?? result.quote?.regularMarketPrice ?? null;
+    let gex = null;
+    if (forward && selectedOptions?.expirationDate) {
+      const expiryMs = selectedOptions.expirationDate * 1000 + 21 * 60 * 60 * 1000;
+      const timeYears = Math.max((expiryMs - Date.now()) / (365.25 * 24 * 60 * 60 * 1000), 1 / (365.25 * 24 * 12));
+      gex = computeGex(selectedOptions?.calls ?? [], selectedOptions?.puts ?? [], forward, timeYears, market.gexMultiplier);
+    }
+
     response.setHeader('Cache-Control', 'no-store');
     return response.status(200).json({
       symbol,
@@ -585,6 +612,9 @@ export default async function handler(request, response) {
       previousDayHigh: selectedPreviousSession?.high ?? null,
       previousDayClose: selectedPreviousSession?.close ?? null,
       previousDayDate: selectedPreviousSession?.date ?? null,
+      todayOpen: todaySession(dailyPayload?.chart?.result?.[0])?.open ?? null,
+      todayHigh: todaySession(dailyPayload?.chart?.result?.[0])?.high ?? null,
+      todayLow: todaySession(dailyPayload?.chart?.result?.[0])?.low ?? null,
       referencePreviousDayHigh: referencePreviousSession?.high ?? null,
       referencePreviousDayDate: referencePreviousSession?.date ?? null,
       futuresPreviousDayHigh: futuresPreviousSession?.high ?? null,
@@ -592,6 +622,8 @@ export default async function handler(request, response) {
       futuresPreviousDayDate: futuresPreviousSession?.date ?? null,
       overnightHistory,
       overnightError: overnightHistory.length ? null : overnightResult?.meta?.symbol ? 'No overnight futures history.' : 'Nasdaq futures history is unavailable.',
+      sessionOpenRatio: null,
+      gex,
       fetchedAt: new Date().toISOString(),
     });
   } catch {
