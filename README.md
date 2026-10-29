@@ -2,6 +2,8 @@
 
 Vite + React app for viewing calls and puts from Yahoo Finance. The browser requests `/api/options`; the Vercel function fetches the Yahoo Finance response server-side.
 
+DAX (`^GDAXI`) is sourced from Eurex instead: the function reads DAX® End-of-Day Options (ODAP, weekly contracts) from the Eurex statistics API (`/api/v1/overallstatistics/3734540`) and combines them with the Yahoo Finance index chart.
+
 ## Local development
 
 ```sh

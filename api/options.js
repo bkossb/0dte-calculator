@@ -7,27 +7,30 @@ const INSTRUMENT_MARKETS = {
   '^SPX': { cfdSymbol: 'US500', futuresSymbol: 'ES=F', referenceSymbol: 'SPY', confirmationSymbol: 'SPY' },
   DIA: { cfdSymbol: 'US30', futuresSymbol: 'YM=F', referenceSymbol: 'DIA' },
   GLD: { cfdSymbol: 'XAUUSD', futuresSymbol: 'GC=F', referenceSymbol: 'GLD' },
+  '^GDAXI': { cfdSymbol: 'DE40', futuresSymbol: '^GDAXI', referenceSymbol: '^GDAXI', eurexProductId: 3734540, eurexContractType: 'weekly' },
 };
 const YAHOO_HEADERS = { 'User-Agent': 'Mozilla/5.0 (compatible; OptionsDesk/1.0)' };
+const EUREX_HEADERS = { 'User-Agent': 'Mozilla/5.0 (compatible; OptionsDesk/1.0)' };
+const EUREX_TIME_ZONE = 'Europe/Berlin';
 let cachedYahooSession = null;
 
-function newYorkDate(timestamp) {
+function zonedDate(timestamp, timeZone) {
   return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/New_York',
+    timeZone,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
   }).format(new Date(timestamp * 1000));
 }
 
-function previousSession(dailyResult) {
+function previousSession(dailyResult, timeZone = 'America/New_York') {
   const timestamps = dailyResult?.timestamp ?? [];
   const highs = dailyResult?.indicators?.quote?.[0]?.high ?? [];
   const closes = dailyResult?.indicators?.quote?.[0]?.close ?? [];
-  const todayInNewYork = newYorkDate(Date.now() / 1000);
+  const today = zonedDate(Date.now() / 1000, timeZone);
   return timestamps
-    .map((time, index) => ({ time, high: highs[index], close: closes[index], date: newYorkDate(time) }))
-    .filter((bar) => bar.date < todayInNewYork && Number.isFinite(bar.high))
+    .map((time, index) => ({ time, high: highs[index], close: closes[index], date: zonedDate(time, timeZone) }))
+    .filter((bar) => bar.date < today && Number.isFinite(bar.high))
     .at(-1) ?? null;
 }
 
@@ -69,6 +72,163 @@ async function fetchYahooOptions(url) {
   return upstream;
 }
 
+function berlinCompactDate(date = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: EUREX_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date).replaceAll('-', '');
+}
+
+function eurexTradingDateToCompact(value) {
+  const match = /^(\d{2})-(\d{2})-(\d{4})/.exec(String(value ?? ''));
+  return match ? `${match[3]}${match[2]}${match[1]}` : null;
+}
+
+function compactDateToEpoch(compact) {
+  return Date.UTC(Number(compact.slice(0, 4)), Number(compact.slice(4, 6)) - 1, Number(compact.slice(6, 8))) / 1000;
+}
+
+function eurexContract(row, productDate, side, spot) {
+  const last = Number.isFinite(row.last) && row.last > 0 ? row.last : null;
+  const settle = Number.isFinite(row.dSettle) && row.dSettle > 0 ? row.dSettle : null;
+  return {
+    contractSymbol: `ODAP-${productDate}-${side === 'call' ? 'C' : 'P'}-${row.strike}`,
+    strike: row.strike,
+    lastPrice: last ?? settle ?? NaN,
+    bid: NaN,
+    ask: NaN,
+    change: NaN,
+    percentChange: NaN,
+    volume: Number.isFinite(row.volume) ? row.volume : 0,
+    openInterest: Number.isFinite(row.openInterest) ? row.openInterest : 0,
+    impliedVolatility: NaN,
+    inTheMoney: Number.isFinite(spot) ? (side === 'call' ? row.strike < spot : row.strike > spot) : false,
+  };
+}
+
+async function handleEurexChain(request, response, symbol, market, range) {
+  const chartUrl = new URL(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}`);
+  chartUrl.searchParams.set('range', range);
+  chartUrl.searchParams.set('interval', CHART_RANGES[range]);
+  chartUrl.searchParams.set('includePrePost', 'true');
+  const dailyUrl = new URL(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}`);
+  dailyUrl.searchParams.set('range', '5d');
+  dailyUrl.searchParams.set('interval', '1d');
+  const overnightUrl = new URL(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(market.futuresSymbol)}`);
+  const now = Math.floor(Date.now() / 1000);
+  overnightUrl.searchParams.set('period1', String(now - 24 * 60 * 60));
+  overnightUrl.searchParams.set('period2', String(now));
+  overnightUrl.searchParams.set('interval', '5m');
+  overnightUrl.searchParams.set('includePrePost', 'true');
+  const overviewUrl = `https://www.eurex.com/api/v1/overallstatistics/${market.eurexProductId}?filtertype=overview`;
+
+  try {
+    const { cookie } = await getYahooSession();
+    const requestHeaders = { ...YAHOO_HEADERS, Cookie: cookie };
+    const [overviewResponse, chartUpstream, dailyUpstream, overnightUpstream] = await Promise.all([
+      fetch(overviewUrl, { headers: EUREX_HEADERS }).catch(() => null),
+      fetch(chartUrl, { headers: requestHeaders }).catch(() => null),
+      fetch(dailyUrl, { headers: requestHeaders }).catch(() => null),
+      fetch(overnightUrl, { headers: requestHeaders }).catch(() => null),
+    ]);
+    const [overview, chartPayload, dailyPayload, overnightPayload] = await Promise.all([
+      overviewResponse?.ok ? overviewResponse.json().catch(() => null) : null,
+      chartUpstream?.ok ? chartUpstream.json().catch(() => null) : null,
+      dailyUpstream?.ok ? dailyUpstream.json().catch(() => null) : null,
+      overnightUpstream?.ok ? overnightUpstream.json().catch(() => null) : null,
+    ]);
+
+    const chartResult = chartPayload?.chart?.result?.[0];
+    const price = chartResult?.meta?.regularMarketPrice ?? null;
+    const selectedPreviousSession = previousSession(dailyPayload?.chart?.result?.[0], EUREX_TIME_ZONE);
+    const previousClose = selectedPreviousSession?.close
+      ?? chartResult?.meta?.chartPreviousClose
+      ?? overview?.header?.underlyingClosingPrice
+      ?? null;
+
+    const todayCompact = berlinCompactDate();
+    const weeklyDates = (overview?.dataRows ?? [])
+      .filter((row) => row.contractType === 'W')
+      .map((row) => String(row.date))
+      .sort();
+    const selectedDate = weeklyDates.find((date) => date === todayCompact)
+      ?? weeklyDates.find((date) => date > todayCompact)
+      ?? weeklyDates.at(-1)
+      ?? null;
+    const isNearestExpiration = Boolean(selectedDate && selectedDate !== todayCompact);
+    const busdate = eurexTradingDateToCompact(overview?.header?.tradingDates?.[0]);
+
+    let calls = [];
+    let puts = [];
+    let optionsError = null;
+    let optionsWarning = null;
+    if (!selectedDate || !busdate) {
+      optionsError = 'Eurex nie zwrócił tygodniowych terminów opcji DAX.';
+    } else {
+      const detailUrl = `https://www.eurex.com/api/v1/overallstatistics/${market.eurexProductId}?filtertype=detail&productdate=${selectedDate}&busdate=${busdate}&contracttype=${market.eurexContractType}`;
+      const detailResponse = await fetch(detailUrl, { headers: EUREX_HEADERS }).catch(() => null);
+      const detail = detailResponse?.ok ? await detailResponse.json().catch(() => null) : null;
+      if (!detail || (!(detail.dataRowsCall ?? []).length && !(detail.dataRowsPut ?? []).length)) {
+        optionsError = `Brak opcji Eurex dla ${symbol} dziś ani w najbliższym terminie.`;
+      } else {
+        calls = (detail.dataRowsCall ?? []).map((row) => eurexContract(row, selectedDate, 'call', price));
+        puts = (detail.dataRowsPut ?? []).map((row) => eurexContract(row, selectedDate, 'put', price));
+        if (isNearestExpiration) optionsWarning = `Brak opcji 0DTE dla ${symbol}; pokazuję najbliższy termin.`;
+      }
+    }
+
+    const timestamps = chartResult?.timestamp ?? [];
+    const closes = chartResult?.indicators?.quote?.[0]?.close ?? [];
+    const history = timestamps.flatMap((time, index) => Number.isFinite(closes[index]) ? [{ time, close: closes[index] }] : []);
+    const overnightResult = overnightPayload?.chart?.result?.[0];
+    const overnightTimestamps = overnightResult?.timestamp ?? [];
+    const overnightCloses = overnightResult?.indicators?.quote?.[0]?.close ?? [];
+    const overnightHistory = overnightTimestamps.flatMap((time, index) => Number.isFinite(overnightCloses[index]) ? [{ time, close: overnightCloses[index] }] : []);
+
+    response.setHeader('Cache-Control', 'no-store');
+    return response.status(200).json({
+      symbol,
+      cfdSymbol: market.cfdSymbol,
+      futuresSymbol: market.futuresSymbol,
+      referenceSymbol: market.referenceSymbol,
+      confirmationSymbol: null,
+      quote: {
+        price,
+        previousClose,
+        changePercent: price !== null && previousClose ? (price / previousClose - 1) * 100 : null,
+        currency: chartResult?.meta?.currency ?? 'EUR',
+      },
+      expirations: weeklyDates.map(compactDateToEpoch),
+      selectedExpiration: selectedDate ? compactDateToEpoch(selectedDate) : null,
+      isNearestExpiration,
+      calls,
+      puts,
+      optionsError,
+      optionsWarning,
+      confirmation: null,
+      confirmationWarning: null,
+      chartRange: range,
+      history,
+      chartError: history.length ? null : chartPayload?.chart?.error?.description || 'Yahoo Finance nie zwrócił danych historycznych.',
+      previousDayHigh: selectedPreviousSession?.high ?? null,
+      previousDayClose: selectedPreviousSession?.close ?? null,
+      previousDayDate: selectedPreviousSession?.date ?? null,
+      referencePreviousDayHigh: selectedPreviousSession?.high ?? null,
+      referencePreviousDayDate: selectedPreviousSession?.date ?? null,
+      futuresPreviousDayHigh: selectedPreviousSession?.high ?? null,
+      futuresPreviousDayClose: selectedPreviousSession?.close ?? null,
+      futuresPreviousDayDate: selectedPreviousSession?.date ?? null,
+      overnightHistory,
+      overnightError: overnightHistory.length ? null : 'DAX index history is unavailable.',
+      fetchedAt: new Date().toISOString(),
+    });
+  } catch {
+    return response.status(502).json({ error: 'Nie udało się połączyć z Eurex/Yahoo Finance.' });
+  }
+}
+
 export default async function handler(request, response) {
   const symbol = String(request.query.symbol || 'QQQ').trim().toUpperCase();
   const expiration = request.query.date ? Number(request.query.date) : null;
@@ -86,6 +246,9 @@ export default async function handler(request, response) {
   }
   if (!Object.hasOwn(CHART_RANGES, range)) {
     return response.status(400).json({ error: 'Nieprawidłowy zakres wykresu.' });
+  }
+  if (market.eurexProductId) {
+    return handleEurexChain(request, response, symbol, market, range);
   }
 
   const url = new URL(`https://query1.finance.yahoo.com/v7/finance/options/${encodeURIComponent(symbol)}`);

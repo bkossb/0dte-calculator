@@ -73,6 +73,7 @@ const instruments = [
   { symbol: 'SPY', label: 'SPY', exchange: 'NYSE ARCA', cfdSymbol: 'US500', futuresSymbol: 'ES=F', option: 'SPY · US500 · SPX confirm', description: 'S&P 500 ETF options · SPX confluence' },
   { symbol: 'DIA', label: 'DIA', exchange: 'NYSE ARCA', cfdSymbol: 'US30', futuresSymbol: 'YM=F', option: 'DIA · US30', description: 'SPDR Dow Jones Industrial Average ETF Trust · US30' },
   { symbol: 'GLD', label: 'GLD', exchange: 'NYSE ARCA', cfdSymbol: 'XAUUSD', futuresSymbol: 'GC=F', option: 'GLD · XAUUSD', description: 'SPDR Gold Shares · XAUUSD proxy' },
+  { symbol: '^GDAXI', label: 'DAX', exchange: 'EUREX', cfdSymbol: 'DE40', futuresSymbol: '^GDAXI', option: 'DAX · DE40 · Eurex ODAP', description: 'DAX index · Eurex End-of-Day Options (weekly)' },
 ];
 
 function display(value: number | null | undefined, digits = 2) {
@@ -231,7 +232,7 @@ function PriceChart({
 
 export default function App() {
   const [symbol, setSymbol] = useState('^NDX');
-  const [cfdPreviousHighs, setCfdPreviousHighs] = useState<Record<string, string>>({ US100: '', US500: '', US30: '', XAUUSD: '' });
+  const [cfdPreviousHighs, setCfdPreviousHighs] = useState<Record<string, string>>({ US100: '', US500: '', US30: '', XAUUSD: '', DE40: '' });
   const [chain, setChain] = useState<Chain | null>(null);
   const [expiration, setExpiration] = useState(todayExpiration());
   const [loading, setLoading] = useState(true);
@@ -292,7 +293,7 @@ export default function App() {
     return allStrikes.map((strike) => ({ strike, call: callMap.get(strike), put: putMap.get(strike) }));
   }, [chain]);
   const price = chain?.quote.price;
-  const wallTolerance = symbol === '^NDX' || symbol === '^SPX' ? CASH_INDEX_WALL_TOLERANCE : WALL_TOLERANCE;
+  const wallTolerance = symbol === '^NDX' || symbol === '^SPX' || symbol === '^GDAXI' ? CASH_INDEX_WALL_TOLERANCE : WALL_TOLERANCE;
   const walls = useMemo(() => {
     return {
       call: selectWallContracts(chain?.calls ?? [], price ?? null, 'above', wallTolerance),
@@ -322,6 +323,7 @@ export default function App() {
     ? `${chain.optionsError}${chain.expirations[0] ? ` Najbliższy termin: ${expirationLabel(chain.expirations[0])}.` : ''}`
     : '';
   const changePositive = (chain?.quote.changePercent ?? 0) >= 0;
+  const currencySymbol = chain?.quote.currency === 'EUR' ? '€' : '$';
   const cfdToFuturesFactor = cfdHigh > 0 && chain?.futuresPreviousDayHigh
     ? cfdHigh / chain.futuresPreviousDayHigh
     : null;
@@ -445,7 +447,7 @@ export default function App() {
           <span className="brand-mark"><Activity size={17} strokeWidth={2.2} /></span>
           <span>MARKET<span className="brand-light">DESK</span></span>
         </a>
-        <div className="topbar-right"><span className="live-dot" /> OPTIONS MARKET <span className="topbar-divider" /> US EQUITIES</div>
+        <div className="topbar-right"><span className="live-dot" /> OPTIONS MARKET <span className="topbar-divider" /> {activeInstrument?.exchange === 'EUREX' ? 'EUREX' : 'US EQUITIES'}</div>
       </header>
 
       <section className="instrument-head">
@@ -454,7 +456,7 @@ export default function App() {
           <div className="title-row">
             <h1>{activeInstrument?.label ?? symbol}</h1>
             <span className="exchange-tag">{activeInstrument?.exchange ?? 'US EQUITY'}</span>
-            {price !== null && price !== undefined && <span className="price">${display(price)}</span>}
+            {price !== null && price !== undefined && <span className="price">{currencySymbol}{display(price)}</span>}
             {chain?.quote.changePercent !== null && chain?.quote.changePercent !== undefined && (
               <span className={`price-change ${changePositive ? 'positive' : 'negative'}`}>
                 {changePositive ? <ArrowUp size={13} /> : <ArrowDown size={13} />}{display(Math.abs(chain.quote.changePercent), 2)}%
@@ -552,20 +554,20 @@ export default function App() {
           {wallConfluence.filter((wall) => wall.side === 'put').map((wall) => <div className="level-row put-level" key={`put-${wall.contract.strike}`}>
             <span className="level-name">{wall.label}</span>
             <div className="level-track"><span className="level-marker" style={{ left: levelPosition(wall.consensusStrike) }} /></div>
-            <strong className="level-price">${display(wall.consensusStrike)}</strong>
+            <strong className="level-price">{currencySymbol}{display(wall.consensusStrike)}</strong>
             <span className="level-distance">{display(wall.consensusOffsetPct)}%</span>
             <span className={`confluence-tag ${wall.confirmation ? 'confirmed' : 'single-source'}`}>{wall.confirmation ? `CONF ${chain?.confirmation?.symbol}` : chain?.confirmationSymbol ? 'UNCONFIRMED' : 'SINGLE'}</span>
           </div>)}
           <div className="level-row spot-level">
             <span className="level-name">SPOT</span>
             <div className="level-track"><span className="level-marker" style={price !== null && price !== undefined ? { left: levelPosition(price) } : undefined} /></div>
-            <strong className="level-price">{price === null || price === undefined ? '—' : `$${display(price)}`}</strong>
+            <strong className="level-price">{price === null || price === undefined ? '—' : `${currencySymbol}${display(price)}`}</strong>
             <span className="level-distance">UNDERLYING</span>
           </div>
           {wallConfluence.filter((wall) => wall.side === 'call').map((wall) => <div className="level-row call-level" key={`call-${wall.contract.strike}`}>
             <span className="level-name">{wall.label}</span>
             <div className="level-track"><span className="level-marker" style={{ left: levelPosition(wall.consensusStrike) }} /></div>
-            <strong className="level-price">${display(wall.consensusStrike)}</strong>
+            <strong className="level-price">{currencySymbol}{display(wall.consensusStrike)}</strong>
             <span className="level-distance">{display(wall.consensusOffsetPct)}%</span>
             <span className={`confluence-tag ${wall.confirmation ? 'confirmed' : 'single-source'}`}>{wall.confirmation ? `CONF ${chain?.confirmation?.symbol}` : chain?.confirmationSymbol ? 'UNCONFIRMED' : 'SINGLE'}</span>
           </div>)}
@@ -580,17 +582,17 @@ export default function App() {
         <div className="cfd-inputs">
           <div className="reference-high">
             <span className="metric-label">{activeInstrument?.label ?? symbol} · OPTION PDH</span>
-            <strong>{chain?.previousDayHigh ? `$${display(chain.previousDayHigh)}` : '—'}</strong>
+            <strong>{chain?.previousDayHigh ? `${currencySymbol}${display(chain.previousDayHigh)}` : '—'}</strong>
             <span>{chain?.previousDayDate ?? 'Waiting for daily data'}</span>
           </div>
           <div className="reference-high futures-reference-high">
             <span className="metric-label">{futuresSymbol} · FUTURES PDH</span>
-            <strong>{chain?.futuresPreviousDayHigh ? `$${display(chain.futuresPreviousDayHigh)}` : '—'}</strong>
+            <strong>{chain?.futuresPreviousDayHigh ? `${currencySymbol}${display(chain.futuresPreviousDayHigh)}` : '—'}</strong>
             <span>{chain?.futuresPreviousDayDate ?? 'Waiting for daily data'}</span>
           </div>
           {<div className="reference-high qqq-reference-high">
             <span className="metric-label">{chain?.referenceSymbol ?? activeInstrument?.label ?? symbol} · REFERENCE PDH</span>
-            <strong>{chain?.referencePreviousDayHigh ? `$${display(chain.referencePreviousDayHigh)}` : '—'}</strong>
+            <strong>{chain?.referencePreviousDayHigh ? `${currencySymbol}${display(chain.referencePreviousDayHigh)}` : '—'}</strong>
             <span>{chain?.referencePreviousDayDate ?? 'Waiting for daily data'}</span>
           </div>}
           <div className="conversion-steps">
@@ -674,7 +676,7 @@ export default function App() {
             </tbody>
           </table>
         </div>
-        <footer className="panel-footer"><span>DATA: YAHOO FINANCE</span><span>{updatedAt ? `UPDATED ${updatedAt}` : 'AWAITING MARKET DATA'} · DELAYED DATA MAY APPLY</span></footer>
+        <footer className="panel-footer"><span>DATA: {symbol === '^GDAXI' ? 'EUREX · YAHOO FINANCE' : 'YAHOO FINANCE'}</span><span>{updatedAt ? `UPDATED ${updatedAt}` : 'AWAITING MARKET DATA'} · DELAYED DATA MAY APPLY</span></footer>
       </section>
       <footer className="page-footer"><span>Market Desk</span><span>For informational purposes only. Not investment advice.</span></footer>
     </main>
