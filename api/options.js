@@ -155,6 +155,94 @@ function compactDateToEpoch(compact) {
   return Date.UTC(Number(compact.slice(0, 4)), Number(compact.slice(4, 6)) - 1, Number(compact.slice(6, 8))) / 1000;
 }
 
+function normPdf(x) {
+  return Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI);
+}
+
+function normCdf(x) {
+  const t = 1 / (1 + 0.2316419 * Math.abs(x));
+  const poly = t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
+  const cdf = 1 - normPdf(x) * poly;
+  return x >= 0 ? cdf : 1 - cdf;
+}
+
+function black76Price(side, forward, strike, timeYears, sigma) {
+  if (sigma <= 0 || timeYears <= 0 || forward <= 0 || strike <= 0) return NaN;
+  const sqrtT = Math.sqrt(timeYears);
+  const d1 = (Math.log(forward / strike) + 0.5 * sigma * sigma * timeYears) / (sigma * sqrtT);
+  const d2 = d1 - sigma * sqrtT;
+  return side === 'call'
+    ? forward * normCdf(d1) - strike * normCdf(d2)
+    : strike * normCdf(-d2) - forward * normCdf(-d1);
+}
+
+function black76ImpliedVol(side, price, forward, strike, timeYears) {
+  const intrinsic = Math.max(side === 'call' ? forward - strike : strike - forward, 0);
+  if (!Number.isFinite(price) || price <= intrinsic + 1e-9) return NaN;
+  let low = 1e-4;
+  let high = 5;
+  for (let i = 0; i < 80; i += 1) {
+    const mid = (low + high) / 2;
+    const value = black76Price(side, forward, strike, timeYears, mid);
+    if (!Number.isFinite(value)) return NaN;
+    if (value > price) high = mid;
+    else low = mid;
+  }
+  return (low + high) / 2;
+}
+
+function black76Gamma(forward, strike, timeYears, sigma) {
+  if (sigma <= 0 || timeYears <= 0 || forward <= 0 || strike <= 0) return NaN;
+  const d1 = (Math.log(forward / strike) + 0.5 * sigma * sigma * timeYears) / (sigma * Math.sqrt(timeYears));
+  return normPdf(d1) / (forward * sigma * Math.sqrt(timeYears));
+}
+
+const ODAP_MULTIPLIER = 5;
+
+function computeGex(calls, puts, forward, timeYears) {
+  if (!Number.isFinite(forward) || forward <= 0 || timeYears <= 0) return null;
+  const rows = [];
+  for (const [side, contracts] of [['call', calls], ['put', puts]]) {
+    for (const contract of contracts) {
+      if (!Number.isFinite(contract.openInterest) || contract.openInterest <= 0) continue;
+      const settle = Number.isFinite(contract.lastPrice) ? contract.lastPrice : NaN;
+      const sigma = black76ImpliedVol(side, settle, forward, contract.strike, timeYears);
+      if (!Number.isFinite(sigma)) continue;
+      const gamma = black76Gamma(forward, contract.strike, timeYears, sigma);
+      if (!Number.isFinite(gamma)) continue;
+      const sign = side === 'call' ? 1 : -1;
+      const gex = sign * gamma * contract.openInterest * ODAP_MULTIPLIER * forward * forward * 0.01;
+      rows.push({ strike: contract.strike, side, gex, openInterest: contract.openInterest, impliedVolatility: sigma });
+    }
+  }
+  if (!rows.length) return null;
+  const byStrike = new Map();
+  for (const row of rows) {
+    byStrike.set(row.strike, (byStrike.get(row.strike) ?? 0) + row.gex);
+  }
+  const sortedStrikes = [...byStrike.entries()].sort((a, b) => a[0] - b[0]);
+  let gammaFlip = null;
+  for (let i = 1; i < sortedStrikes.length; i += 1) {
+    const [strikeA, gexA] = sortedStrikes[i - 1];
+    const [strikeB, gexB] = sortedStrikes[i];
+    if ((gexA > 0 && gexB < 0) || (gexA < 0 && gexB > 0)) {
+      gammaFlip = strikeA + (strikeB - strikeA) * (Math.abs(gexA) / (Math.abs(gexA) + Math.abs(gexB)));
+      break;
+    }
+  }
+  const callWall = rows.filter((row) => row.side === 'call' && row.strike > forward).sort((a, b) => b.gex - a.gex)[0] ?? null;
+  const putWall = rows.filter((row) => row.side === 'put' && row.strike < forward).sort((a, b) => a.gex - b.gex)[0] ?? null;
+  const topByGex = [...rows].sort((a, b) => Math.abs(b.gex) - Math.abs(a.gex)).slice(0, 8);
+  return {
+    forward,
+    timeYears,
+    gammaFlip,
+    callWall: callWall ? { strike: callWall.strike, gex: callWall.gex, openInterest: callWall.openInterest } : null,
+    putWall: putWall ? { strike: putWall.strike, gex: putWall.gex, openInterest: putWall.openInterest } : null,
+    topByGex,
+  };
+}
+
 function eurexContract(row, productDate, side, spot) {
   const last = Number.isFinite(row.last) && row.last > 0 ? row.last : null;
   const settle = Number.isFinite(row.dSettle) && row.dSettle > 0 ? row.dSettle : null;
@@ -259,6 +347,14 @@ async function handleEurexChain(request, response, symbol, market, range) {
     const futuresPreviousDayClose = futuresPrevious?.close ?? selectedPreviousSession?.close ?? null;
     const futuresPreviousDayDate = futuresPrevious?.date ?? selectedPreviousSession?.date ?? null;
 
+    const forward = overnightHistory.at(-1)?.close ?? null;
+    let gex = null;
+    if (forward && selectedDate) {
+      const expiryUtc = Date.UTC(Number(selectedDate.slice(0, 4)), Number(selectedDate.slice(4, 6)) - 1, Number(selectedDate.slice(6, 8)), 16, 30);
+      const timeYears = Math.max((expiryUtc - Date.now()) / (365.25 * 24 * 60 * 60 * 1000), 1 / (365.25 * 24 * 12));
+      gex = computeGex(calls, puts, forward, timeYears);
+    }
+
     response.setHeader('Cache-Control', 'no-store');
     return response.status(200).json({
       symbol,
@@ -293,6 +389,7 @@ async function handleEurexChain(request, response, symbol, market, range) {
       futuresPreviousDayClose: futuresPreviousDayClose,
       futuresPreviousDayDate: futuresPreviousDayDate,
       sessionOpenRatio,
+      gex,
       overnightHistory,
       overnightError: overnightHistory.length ? null : 'FDAX futures history is unavailable.',
       fetchedAt: new Date().toISOString(),

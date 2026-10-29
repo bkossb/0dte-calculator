@@ -60,6 +60,14 @@ type Chain = {
   futuresPreviousDayClose: number | null;
   futuresPreviousDayDate: string | null;
   sessionOpenRatio: number | null;
+  gex: {
+    forward: number;
+    timeYears: number;
+    gammaFlip: number | null;
+    callWall: { strike: number; gex: number; openInterest: number } | null;
+    putWall: { strike: number; gex: number; openInterest: number } | null;
+    topByGex: { strike: number; side: 'call' | 'put'; gex: number; openInterest: number; impliedVolatility: number }[];
+  } | null;
   fetchedAt: string;
 };
 
@@ -122,21 +130,29 @@ function wallMetric(contracts: Contract[]) {
   };
 }
 
-function selectWallContracts(contracts: Contract[], spot: number | null, direction: 'above' | 'below', tolerance: number, leaderThreshold = 0.33, maxWalls = 3) {
+function selectWallContracts(contracts: Contract[], spot: number | null, direction: 'above' | 'below', tolerance: number, leaderThreshold = 0.33, maxWalls = 3, minMetric = 0) {
   if (spot === null || spot <= 0) return [];
   const minimum = spot * (1 - tolerance);
   const maximum = spot * (1 + tolerance);
   const metric = wallMetric(contracts);
-  const candidates = contracts
-    .filter((contract) => metric(contract) > 0)
+  const inBand = contracts
+    .filter((contract) => metric(contract) >= minMetric)
+    .filter((contract) => contract.strike >= minimum && contract.strike <= maximum);
+  const dominant = inBand
+    .filter((contract) => direction === 'above' ? contract.strike <= spot : contract.strike >= spot)
+    .filter((contract) => metric(contract) >= 50)
+    .sort((left, right) => metric(right) - metric(left))
+    .slice(0, 1);
+  const dominantStrikes = new Set(dominant.map((contract) => contract.strike));
+  const candidates = inBand
     .filter((contract) => direction === 'above'
-      ? contract.strike > spot && contract.strike <= maximum
-      : contract.strike < spot && contract.strike >= minimum)
+      ? contract.strike > spot && !dominantStrikes.has(contract.strike)
+      : contract.strike < spot && !dominantStrikes.has(contract.strike))
     .sort((left, right) => metric(right) - metric(left) || Math.abs(left.strike - spot) - Math.abs(right.strike - spot));
   const leader = candidates[0] ? metric(candidates[0]) : 0;
-  return candidates
+  return [...dominant, ...candidates
     .filter((contract) => metric(contract) >= leader * leaderThreshold)
-    .slice(0, maxWalls)
+    .slice(0, maxWalls - dominant.length)]
     .sort((left, right) => left.strike - right.strike);
 }
 
@@ -297,15 +313,16 @@ export default function App() {
     return allStrikes.map((strike) => ({ strike, call: callMap.get(strike), put: putMap.get(strike) }));
   }, [chain]);
   const price = chain?.quote.price;
-  const wallTolerance = symbol === '^GDAXI' ? 0.01 : symbol === '^NDX' || symbol === '^SPX' ? CASH_INDEX_WALL_TOLERANCE : WALL_TOLERANCE;
+  const wallTolerance = symbol === '^NDX' || symbol === '^SPX' || symbol === '^GDAXI' ? CASH_INDEX_WALL_TOLERANCE : WALL_TOLERANCE;
   const wallLeaderThreshold = symbol === '^GDAXI' ? 0.10 : 0.33;
   const maxWalls = symbol === '^GDAXI' ? 4 : 3;
+  const wallMinMetric = symbol === '^GDAXI' ? 10 : 0;
   const walls = useMemo(() => {
     return {
-      call: selectWallContracts(chain?.calls ?? [], price ?? null, 'above', wallTolerance, wallLeaderThreshold, maxWalls),
-      put: selectWallContracts(chain?.puts ?? [], price ?? null, 'below', wallTolerance, wallLeaderThreshold, maxWalls),
+      call: selectWallContracts(chain?.calls ?? [], price ?? null, 'above', wallTolerance, wallLeaderThreshold, maxWalls, wallMinMetric),
+      put: selectWallContracts(chain?.puts ?? [], price ?? null, 'below', wallTolerance, wallLeaderThreshold, maxWalls, wallMinMetric),
     };
-  }, [chain, price, wallTolerance, wallLeaderThreshold, maxWalls]);
+  }, [chain, price, wallTolerance, wallLeaderThreshold, maxWalls, wallMinMetric]);
   const confirmationPrice = chain?.confirmation?.price ?? null;
   const confirmationWalls = useMemo(() => ({
     call: selectWallContracts(chain?.confirmation?.calls ?? [], confirmationPrice, 'above', wallTolerance),
@@ -413,6 +430,8 @@ export default function App() {
         const mappedPrice = mapped(wall.consensusStrike);
         return mappedPrice === null ? [] : [{ price: mappedPrice, color: '#f18270', title: wall.confirmation ? `${wall.label} CONF` : wall.label }];
       }),
+      ...(chain?.gex?.putWall ? [{ price: mapped(chain.gex.putWall.strike) ?? 0, color: '#c0392b', title: 'GEX P' }].filter((l) => l.price > 0) : []),
+      ...(chain?.gex?.gammaFlip ? [{ price: mapped(chain.gex.gammaFlip) ?? 0, color: '#b8a1e3', title: 'FLIP' }].filter((l) => l.price > 0) : []),
       ...(cfdSpot !== null ? [{ price: cfdSpot, color: '#d8e2da', title: 'SPOT' }] : []),
       ...(cfdHigh > 0 ? [{ price: cfdHigh, color: '#f3c969', title: 'CFD PDH' }] : chain?.futuresPreviousDayHigh ? [{ price: chain.futuresPreviousDayHigh, color: '#f3c969', title: `${futuresSymbol} PDH` }] : []),
       ...(chain?.futuresPreviousDayClose ? [{ price: chain.futuresPreviousDayClose * cfdScale, color: '#7aa2f7', title: cfdHigh > 0 ? `${cfdSymbol} PDC` : `${futuresSymbol} PDC` }] : []),
@@ -420,16 +439,20 @@ export default function App() {
         const mappedPrice = mapped(wall.consensusStrike);
         return mappedPrice === null ? [] : [{ price: mappedPrice, color: '#55c99b', title: wall.confirmation ? `${wall.label} CONF` : wall.label }];
       }),
+      ...(chain?.gex?.callWall ? [{ price: mapped(chain.gex.callWall.strike) ?? 0, color: '#27ae60', title: 'GEX C' }].filter((l) => l.price > 0) : []),
     ];
-  }, [wallConfluence, price, chain?.previousDayHigh, chain?.futuresPreviousDayHigh, chain?.futuresPreviousDayClose, chain?.sessionOpenRatio, cfdHigh, cfdScale, cfdSymbol, futuresSymbol]);
+  }, [wallConfluence, price, chain?.previousDayHigh, chain?.futuresPreviousDayHigh, chain?.futuresPreviousDayClose, chain?.sessionOpenRatio, chain?.gex, cfdHigh, cfdScale, cfdSymbol, futuresSymbol]);
   const instrumentChartPoints = useMemo(() => (chain?.history ?? []).map(({ time, close }) => ({ time, value: close })), [chain?.history]);
   const instrumentChartLevels = useMemo(() => [
     ...walls.put.map((wall, index) => ({ price: wall.strike, color: '#f18270', title: `P${index + 1}` })),
+    ...(chain?.gex?.putWall ? [{ price: chain.gex.putWall.strike, color: '#c0392b', title: 'GEX P' }] : []),
+    ...(chain?.gex?.gammaFlip ? [{ price: chain.gex.gammaFlip, color: '#b8a1e3', title: 'FLIP' }] : []),
     ...(price !== null && price !== undefined ? [{ price, color: '#d8e2da', title: 'SPOT' }] : []),
     ...(chain?.previousDayHigh ? [{ price: chain.previousDayHigh, color: '#f3c969', title: 'PDH' }] : []),
     ...(chain?.previousDayClose ? [{ price: chain.previousDayClose, color: '#7aa2f7', title: 'PDC' }] : []),
     ...walls.call.map((wall, index) => ({ price: wall.strike, color: '#55c99b', title: `C${index + 1}` })),
-  ], [walls, price, chain?.previousDayHigh, chain?.previousDayClose]);
+    ...(chain?.gex?.callWall ? [{ price: chain.gex.callWall.strike, color: '#27ae60', title: 'GEX C' }] : []),
+  ], [walls, price, chain?.previousDayHigh, chain?.previousDayClose, chain?.gex]);
   const confirmationChartPoints = useMemo(() => (chain?.confirmation?.history ?? []).map(({ time, close }) => ({ time, value: close })), [chain?.confirmation?.history]);
   const confirmationChartLevels = useMemo(() => [
     ...confirmationWalls.put.map((wall, index) => ({ price: wall.strike, color: '#f18270', title: `P${index + 1}` })),
