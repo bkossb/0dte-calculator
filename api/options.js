@@ -9,7 +9,7 @@ const INSTRUMENT_MARKETS = {
   '^SPX': { cfdSymbol: 'US500', futuresSymbol: 'ES=F', referenceSymbol: 'SPY', confirmationSymbol: 'SPY' },
   DIA: { cfdSymbol: 'US30', futuresSymbol: 'YM=F', referenceSymbol: 'DIA' },
   GLD: { cfdSymbol: 'XAUUSD', futuresSymbol: 'GC=F', referenceSymbol: 'GLD' },
-  '^GDAXI': { cfdSymbol: 'DE40', futuresSymbol: 'DE40', referenceSymbol: '^GDAXI', eurexProductId: 3734540, eurexContractType: 'weekly', tvFuturesSymbol: 'CAPITALCOM:GER40' },
+  '^GDAXI': { cfdSymbol: 'DE40', futuresSymbol: 'FDAX', referenceSymbol: '^GDAXI', eurexProductId: 3734540, eurexContractType: 'weekly', tvFuturesSymbol: 'EUREX:FDAX1!' },
 };
 const YAHOO_HEADERS = { 'User-Agent': 'Mozilla/5.0 (compatible; OptionsDesk/1.0)' };
 const EUREX_HEADERS = { 'User-Agent': 'Mozilla/5.0 (compatible; OptionsDesk/1.0)' };
@@ -247,6 +247,14 @@ async function handleEurexChain(request, response, symbol, market, range) {
     const futuresPrevious = futuresBars?.length
       ? previousSessionFromBars(futuresBars, EUREX_TIME_ZONE)
       : null;
+    const isTodayBerlin = (time) => zonedDate(time, EUREX_TIME_ZONE) === `${todayCompact.slice(0, 4)}-${todayCompact.slice(4, 6)}-${todayCompact.slice(6, 8)}`;
+    const indexOpenBar = (chartResult?.timestamp ?? [])
+      .map((time, index) => ({ time, open: chartResult?.indicators?.quote?.[0]?.open?.[index] }))
+      .find((bar) => isTodayBerlin(bar.time) && Number.isFinite(bar.open));
+    const futuresOpenBar = (futuresBars ?? []).find((bar) => isTodayBerlin(bar.time) && Number.isFinite(bar.open));
+    const sessionOpenRatio = indexOpenBar && futuresOpenBar && futuresOpenBar.open > 0 && indexOpenBar.open > 0
+      ? futuresOpenBar.open / indexOpenBar.open
+      : null;
     const futuresPreviousDayHigh = futuresPrevious?.high ?? selectedPreviousSession?.high ?? null;
     const futuresPreviousDayClose = futuresPrevious?.close ?? selectedPreviousSession?.close ?? null;
     const futuresPreviousDayDate = futuresPrevious?.date ?? selectedPreviousSession?.date ?? null;
@@ -284,6 +292,7 @@ async function handleEurexChain(request, response, symbol, market, range) {
       futuresPreviousDayHigh: futuresPreviousDayHigh,
       futuresPreviousDayClose: futuresPreviousDayClose,
       futuresPreviousDayDate: futuresPreviousDayDate,
+      sessionOpenRatio,
       overnightHistory,
       overnightError: overnightHistory.length ? null : 'FDAX futures history is unavailable.',
       fetchedAt: new Date().toISOString(),
