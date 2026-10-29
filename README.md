@@ -16,6 +16,7 @@ For DIA, the header displays the Dow Jones Industrial Average (`^DJI`) price, da
 
 ```sh
 npm install
+npm install
 npm run dev
 ```
 
