@@ -9,7 +9,7 @@ const INSTRUMENT_MARKETS = {
   '^SPX': { cfdSymbol: 'US500', futuresSymbol: 'ES=F', referenceSymbol: 'SPY', confirmationSymbol: 'SPY' },
   DIA: { cfdSymbol: 'US30', futuresSymbol: 'YM=F', referenceSymbol: 'DIA' },
   GLD: { cfdSymbol: 'XAUUSD', futuresSymbol: 'GC=F', referenceSymbol: 'GLD' },
-  '^GDAXI': { cfdSymbol: 'DE40', futuresSymbol: 'FDAX', referenceSymbol: '^GDAXI', eurexProductId: 3734540, eurexContractType: 'weekly', tvFuturesSymbol: 'EUREX:FDAX1!' },
+  '^GDAXI': { cfdSymbol: 'DE40', futuresSymbol: 'DE40', referenceSymbol: '^GDAXI', eurexProductId: 3734540, eurexContractType: 'weekly', tvFuturesSymbol: 'CAPITALCOM:GER40' },
 };
 const YAHOO_HEADERS = { 'User-Agent': 'Mozilla/5.0 (compatible; OptionsDesk/1.0)' };
 const EUREX_HEADERS = { 'User-Agent': 'Mozilla/5.0 (compatible; OptionsDesk/1.0)' };

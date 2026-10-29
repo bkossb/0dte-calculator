@@ -73,7 +73,7 @@ const instruments = [
   { symbol: 'SPY', label: 'SPY', exchange: 'NYSE ARCA', cfdSymbol: 'US500', futuresSymbol: 'ES=F', option: 'SPY · US500 · SPX confirm', description: 'S&P 500 ETF options · SPX confluence' },
   { symbol: 'DIA', label: 'DIA', exchange: 'NYSE ARCA', cfdSymbol: 'US30', futuresSymbol: 'YM=F', option: 'DIA · US30', description: 'SPDR Dow Jones Industrial Average ETF Trust · US30' },
   { symbol: 'GLD', label: 'GLD', exchange: 'NYSE ARCA', cfdSymbol: 'XAUUSD', futuresSymbol: 'GC=F', option: 'GLD · XAUUSD', description: 'SPDR Gold Shares · XAUUSD proxy' },
-  { symbol: '^GDAXI', label: 'DAX', exchange: 'EUREX', cfdSymbol: 'DE40', futuresSymbol: 'FDAX', option: 'DAX · DE40 · Eurex ODAP', description: 'DAX index · Eurex End-of-Day Options (weekly)' },
+  { symbol: '^GDAXI', label: 'DAX', exchange: 'EUREX', cfdSymbol: 'DE40', futuresSymbol: 'DE40', option: 'DAX · DE40 · Eurex ODAP', description: 'DAX index · Eurex End-of-Day Options (weekly)' },
 ];
 
 function display(value: number | null | undefined, digits = 2) {
@@ -121,18 +121,21 @@ function wallMetric(contracts: Contract[]) {
   };
 }
 
-function selectWallContracts(contracts: Contract[], spot: number | null, direction: 'above' | 'below', tolerance: number) {
+function selectWallContracts(contracts: Contract[], spot: number | null, direction: 'above' | 'below', tolerance: number, leaderThreshold = 0.33) {
   if (spot === null || spot <= 0) return [];
   const minimum = spot * (1 - tolerance);
   const maximum = spot * (1 + tolerance);
   const metric = wallMetric(contracts);
-  return contracts
+  const candidates = contracts
     .filter((contract) => metric(contract) > 0)
     .filter((contract) => direction === 'above'
       ? contract.strike > spot && contract.strike <= maximum
       : contract.strike < spot && contract.strike >= minimum)
-    .sort((left, right) => metric(right) - metric(left) || Math.abs(left.strike - spot) - Math.abs(right.strike - spot))
-    .slice(0, 4)
+    .sort((left, right) => metric(right) - metric(left) || Math.abs(left.strike - spot) - Math.abs(right.strike - spot));
+  const leader = candidates[0] ? metric(candidates[0]) : 0;
+  return candidates
+    .filter((contract) => metric(contract) >= leader * leaderThreshold)
+    .slice(0, 3)
     .sort((left, right) => left.strike - right.strike);
 }
 
@@ -294,12 +297,13 @@ export default function App() {
   }, [chain]);
   const price = chain?.quote.price;
   const wallTolerance = symbol === '^NDX' || symbol === '^SPX' || symbol === '^GDAXI' ? CASH_INDEX_WALL_TOLERANCE : WALL_TOLERANCE;
+  const wallLeaderThreshold = symbol === '^GDAXI' ? 0.25 : 0.33;
   const walls = useMemo(() => {
     return {
-      call: selectWallContracts(chain?.calls ?? [], price ?? null, 'above', wallTolerance),
-      put: selectWallContracts(chain?.puts ?? [], price ?? null, 'below', wallTolerance),
+      call: selectWallContracts(chain?.calls ?? [], price ?? null, 'above', wallTolerance, wallLeaderThreshold),
+      put: selectWallContracts(chain?.puts ?? [], price ?? null, 'below', wallTolerance, wallLeaderThreshold),
     };
-  }, [chain, price, wallTolerance]);
+  }, [chain, price, wallTolerance, wallLeaderThreshold]);
   const confirmationPrice = chain?.confirmation?.price ?? null;
   const confirmationWalls = useMemo(() => ({
     call: selectWallContracts(chain?.confirmation?.calls ?? [], confirmationPrice, 'above', wallTolerance),
@@ -397,20 +401,23 @@ export default function App() {
       if (!chain?.previousDayHigh || !chain?.futuresPreviousDayHigh) return null;
       return cfdScale * chain.futuresPreviousDayHigh * value / chain.previousDayHigh;
     };
+    const cfdSpot = price !== null && price !== undefined ? mapped(price) : null;
+    const lastOvernight = chain?.overnightHistory?.at(-1)?.close ?? null;
+    const basis = cfdSpot !== null && lastOvernight !== null ? lastOvernight - cfdSpot : 0;
     return [
       ...wallConfluence.filter((wall) => wall.side === 'put').flatMap((wall) => {
         const mappedPrice = mapped(wall.consensusStrike);
-        return mappedPrice === null ? [] : [{ price: mappedPrice, color: '#f18270', title: wall.confirmation ? `${wall.label} CONF` : wall.label }];
+        return mappedPrice === null ? [] : [{ price: mappedPrice + basis, color: '#f18270', title: wall.confirmation ? `${wall.label} CONF` : wall.label }];
       }),
-      ...(price !== null && price !== undefined && mapped(price) !== null ? [{ price: mapped(price)!, color: '#d8e2da', title: 'SPOT' }] : []),
+      ...(cfdSpot !== null ? [{ price: cfdSpot + basis, color: '#d8e2da', title: 'SPOT' }] : []),
       ...(cfdHigh > 0 ? [{ price: cfdHigh, color: '#f3c969', title: 'CFD PDH' }] : chain?.futuresPreviousDayHigh ? [{ price: chain.futuresPreviousDayHigh, color: '#f3c969', title: `${futuresSymbol} PDH` }] : []),
       ...(chain?.futuresPreviousDayClose ? [{ price: chain.futuresPreviousDayClose * cfdScale, color: '#7aa2f7', title: cfdHigh > 0 ? `${cfdSymbol} PDC` : `${futuresSymbol} PDC` }] : []),
       ...wallConfluence.filter((wall) => wall.side === 'call').flatMap((wall) => {
         const mappedPrice = mapped(wall.consensusStrike);
-        return mappedPrice === null ? [] : [{ price: mappedPrice, color: '#55c99b', title: wall.confirmation ? `${wall.label} CONF` : wall.label }];
+        return mappedPrice === null ? [] : [{ price: mappedPrice + basis, color: '#55c99b', title: wall.confirmation ? `${wall.label} CONF` : wall.label }];
       }),
     ];
-  }, [wallConfluence, price, chain?.previousDayHigh, chain?.futuresPreviousDayHigh, chain?.futuresPreviousDayClose, cfdHigh, cfdScale, cfdSymbol, futuresSymbol]);
+  }, [wallConfluence, price, chain?.previousDayHigh, chain?.futuresPreviousDayHigh, chain?.futuresPreviousDayClose, chain?.overnightHistory, cfdHigh, cfdScale, cfdSymbol, futuresSymbol]);
   const instrumentChartPoints = useMemo(() => (chain?.history ?? []).map(({ time, close }) => ({ time, value: close })), [chain?.history]);
   const instrumentChartLevels = useMemo(() => [
     ...walls.put.map((wall, index) => ({ price: wall.strike, color: '#f18270', title: `P${index + 1}` })),
@@ -625,7 +632,7 @@ export default function App() {
         <div className="chain-heading">
           <div>
             <h2>Wall strikes</h2>
-            <span className="chain-caption">{showNearestStrikes ? 'NEAREST AVAILABLE STRIKES · WALL LEVELS NEED OPEN INTEREST' : `TOP 4 CALLS + PUTS · WITHIN ±${display(wallTolerance * 100, 0)}% SPOT${wallsByVolume ? ' · BY VOLUME' : ''}`}</span>
+            <span className="chain-caption">{showNearestStrikes ? 'NEAREST AVAILABLE STRIKES · WALL LEVELS NEED OPEN INTEREST' : `KEY CALLS + PUTS · WITHIN ±${display(wallTolerance * 100, 0)}% SPOT · ≥${Math.round(wallLeaderThreshold * 100)}% TOP OI${wallsByVolume ? ' · BY VOLUME' : ''}`}</span>
             {chain?.optionsWarning && <p className="options-warning">{chain.optionsWarning}</p>}
             {wallsByVolume && !showNearestStrikes && <p className="options-warning">Open interest unavailable; walls ranked by volume.</p>}
             {showNearestStrikes && <p className="options-warning">No open-interest walls found; showing the nearest available options.</p>}
