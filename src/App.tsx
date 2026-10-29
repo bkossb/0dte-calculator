@@ -5,9 +5,11 @@ import { CONFLUENCE_TOLERANCE_PCT, instruments } from './config/instruments';
 import { compact, display, expirationLabel, heat, numberFormat, percentage, todayExpiration } from './lib/format';
 import { etfToCashFactor } from './lib/etfConversion';
 import { helpText } from './lib/helpText';
+import { BROWSER_TIME_ZONE, isValidTimeZone, readTimeZonePreference, TIME_ZONE_STORAGE_KEY, timeZoneOptions } from './lib/timeZone';
 import { selectWallContracts, wallMetric } from './lib/walls';
 import { HelpTip } from './components/HelpTip';
 import { PriceChart } from './components/PriceChart';
+import { WallAnalysis, type AnalysisGroup } from './components/WallAnalysis';
 
 const chartLegend = [
   { title: 'PUT WALLS', color: '#f18270', help: helpText.walls },
@@ -23,9 +25,20 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
-  const [updatedAt, setUpdatedAt] = useState('');
+  const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [showAllWalls, setShowAllWalls] = useState(false);
   const [showGex, setShowGex] = useState(false);
+  const [browserTimeZone, setBrowserTimeZone] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
+  const [timeZonePreference, setTimeZonePreference] = useState(() => {
+    try {
+      return readTimeZonePreference(window.localStorage);
+    } catch (error) {
+      console.error('Nie można odczytać zapisanej strefy czasowej:', error);
+      return { selection: BROWSER_TIME_ZONE, warning: 'Nie można odczytać zapisanej strefy czasowej. Używana jest strefa przeglądarki.' };
+    }
+  });
+  const timeZone = timeZonePreference.selection === BROWSER_TIME_ZONE ? browserTimeZone : timeZonePreference.selection;
+  const availableTimeZones = useMemo(() => timeZoneOptions(browserTimeZone, timeZonePreference.selection), [browserTimeZone, timeZonePreference.selection]);
   const requestIdRef = useRef(0);
   const activeInstrument = instruments.find((instrument) => instrument.symbol === symbol);
   const cfdSymbol = activeInstrument?.cfdSymbol ?? chain?.cfdSymbol ?? 'US100';
@@ -45,7 +58,7 @@ export default function App() {
       if (!response.ok) throw new Error(payload.error || `Request failed (${response.status})`);
       setChain(payload as Chain);
       setExpiration(String(payload.selectedExpiration || payload.expirations?.[0] || ''));
-      setUpdatedAt(new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' }));
+      setUpdatedAt(Date.now());
     } catch (requestError) {
       if (requestId === requestIdRef.current) {
         setError(requestError instanceof Error ? requestError.message : 'Nie udało się pobrać danych.');
@@ -69,6 +82,16 @@ export default function App() {
 
     return () => window.clearInterval(refreshTimer);
   }, [symbol]);
+
+  useEffect(() => {
+    const updateBrowserTimeZone = () => setBrowserTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone);
+    window.addEventListener('focus', updateBrowserTimeZone);
+    document.addEventListener('visibilitychange', updateBrowserTimeZone);
+    return () => {
+      window.removeEventListener('focus', updateBrowserTimeZone);
+      document.removeEventListener('visibilitychange', updateBrowserTimeZone);
+    };
+  }, []);
 
   const strikes = useMemo(() => {
     const callMap = new Map((chain?.calls ?? []).map((contract) => [contract.strike, contract]));
@@ -164,11 +187,51 @@ export default function App() {
   const cashHigh = symbol === 'DIA' ? chain?.confirmation?.previousDayHigh : chain?.previousDayHigh;
   const cashDate = symbol === 'DIA' ? chain?.confirmation?.previousDayDate : chain?.previousDayDate;
   const etfFactor = etfToCashFactor(etfHigh, etfDate, cashHigh, cashDate);
-  const etfWalls = symbol === 'DIA' ? walls : chain?.confirmation?.symbol === etfSymbol ? confirmationWalls : { call: [], put: [] };
-  const convertedEtfWalls = [
-    ...etfWalls.put.map((contract, index) => ({ contract, side: 'put' as const, label: `P${index + 1}` })),
-    ...etfWalls.call.map((contract, index) => ({ contract, side: 'call' as const, label: `C${index + 1}` })),
-  ];
+  const convertedEtfWalls = useMemo(() => {
+    const etfWalls = symbol === 'DIA' ? walls : chain?.confirmation?.symbol === etfSymbol ? confirmationWalls : { call: [], put: [] };
+    return [
+      ...etfWalls.put.map((contract, index) => ({ contract, side: 'put' as const, label: `P${index + 1}` })),
+      ...etfWalls.call.map((contract, index) => ({ contract, side: 'call' as const, label: `C${index + 1}` })),
+    ];
+  }, [symbol, walls, chain?.confirmation?.symbol, etfSymbol, confirmationWalls]);
+  const analysisGroups: AnalysisGroup[] = chain ? [
+    {
+      symbol: activeInstrument?.label ?? symbol,
+      spot: price ?? null,
+      emptyMessage: optionsUnavailableMessage || chain.optionsWarning || 'Brak wybranych walli dla dostępnych danych opcyjnych i ceny SPOT.',
+      walls: wallConfluence.map((wall) => {
+        const peerContracts = wall.side === 'put' ? chain.confirmation?.puts : chain.confirmation?.calls;
+        const confirmation = wall.confirmation
+          ? `Dopasowanie ${chain.confirmation?.symbol}: ${display(wall.confirmation.strike)}.`
+          : chain.confirmationSymbol
+            ? confirmationPrice !== null && confirmationPrice > 0 && peerContracts?.length
+              ? `Brak dopasowania ${chain.confirmationSymbol}.`
+              : `Brak danych opcyjnych lub SPOT ${chain.confirmationSymbol} do porównania.`
+            : null;
+        return {
+          label: wall.label,
+          side: wall.side,
+          contract: wall.contract,
+          confirmation,
+          conversion: symbol === 'DIA' ? { symbol: cashSymbol ?? '^DJI', factor: etfFactor } : null,
+        };
+      }),
+    },
+    ...(etfSymbol && symbol !== 'DIA' ? [{
+      symbol: etfSymbol,
+      spot: confirmationPrice,
+      emptyMessage: chain.confirmationWarning || `Brak wybranych walli ${etfSymbol} dla dostępnych danych opcyjnych i ceny SPOT.`,
+      walls: convertedEtfWalls.map((wall) => {
+        const match = wallConfluence.find((primary) =>
+          primary.side === wall.side && primary.confirmation?.contractSymbol === wall.contract.contractSymbol);
+        return {
+          ...wall,
+          confirmation: match ? `Dopasowanie ${activeInstrument?.label ?? symbol}: ${display(match.contract.strike)}.` : `Brak dopasowania do wybranego walla ${activeInstrument?.label ?? symbol}.`,
+          conversion: { symbol: cashSymbol ?? symbol, factor: etfFactor },
+        };
+      }),
+    }] : []),
+  ] : [];
   const levelValues = [...wallConfluence.map((wall) => wall.consensusStrike), price]
     .filter((value): value is number => value !== null && value !== undefined && Number.isFinite(value));
   const levelMinimum = levelValues.length ? Math.min(...levelValues) : 0;
@@ -226,6 +289,20 @@ export default function App() {
     setExpiration('');
     setChain(null);
     void loadChain(nextSymbol, todayExpiration());
+  }
+
+  function selectTimeZone(selection: string) {
+    if (selection !== BROWSER_TIME_ZONE && !isValidTimeZone(selection)) {
+      setTimeZonePreference((current) => ({ ...current, warning: 'Wybrano nieprawidłową strefę czasową.' }));
+      return;
+    }
+    try {
+      window.localStorage.setItem(TIME_ZONE_STORAGE_KEY, selection);
+      setTimeZonePreference({ selection, warning: null });
+    } catch (error) {
+      console.error('Nie można zapisać strefy czasowej:', error);
+      setTimeZonePreference({ selection, warning: 'Nie można zapisać strefy czasowej. Ustawienie działa tylko do zamknięcia lub odświeżenia strony.' });
+    }
   }
 
   function explainWall(wall: WallConfluence) {
@@ -327,13 +404,31 @@ export default function App() {
         </div>
       </section>
 
+      <WallAnalysis
+        groups={analysisGroups}
+        expiration={chain?.selectedExpiration ? `${chain.isNearestExpiration ? 'NEAREST' : '0DTE'} · ${expirationLabel(chain.selectedExpiration)}` : null}
+        updated={updatedAt === null ? null : new Intl.DateTimeFormat('en-GB', { timeZone, dateStyle: 'medium', timeStyle: 'short' }).format(updatedAt)}
+        source={symbol === '^GDAXI' ? 'EUREX (OPCJE EOD) · YAHOO FINANCE' : activeInstrument?.dataSource ?? 'YAHOO FINANCE'}
+        loading={loading}
+        error={error}
+      />
+
       <div className="chart-controls" role="group" aria-label="Chart display">
         <span className="control-label">CHART LEVELS · {showAllWalls ? 'ALL WALLS' : '2 NEAREST PER SIDE'}</span>
         <HelpTip label="Poziomy i grupowanie na wykresach" text={helpText.chart} />
         <button type="button" className="chart-toggle" aria-pressed={showAllWalls} onClick={() => setShowAllWalls((current) => !current)}>ALL WALLS</button>
         <button type="button" className="chart-toggle" aria-pressed={showGex} onClick={() => setShowGex((current) => !current)}>GEX + FLIP</button>
         <HelpTip label="GEX i FLIP" text={`${helpText.gex}\n\n${helpText.flip}\n\n${gexDetails}`} />
+        <label className="time-zone-control">
+          <span className="control-label">TIME ZONE</span>
+          <select aria-label="Strefa czasowa wykresów" value={timeZonePreference.selection} onChange={(event) => selectTimeZone(event.target.value)}>
+            <option value={BROWSER_TIME_ZONE}>BROWSER · {browserTimeZone}</option>
+            {availableTimeZones.map((zone) => <option value={zone} key={zone}>{zone}</option>)}
+          </select>
+        </label>
+        <HelpTip label="Strefa czasowa wykresów" text="Oś czasu, kursor wykresu i czas aktualizacji używają wybranej strefy. Domyślnie jest to strefa przeglądarki; wybór jest zapisywany lokalnie. Zmiana strefy nie zmienia danych ani dat sesji giełdowej i wygaśnięcia." />
       </div>
+      {timeZonePreference.warning && <p className="options-warning time-zone-warning" role="alert">{timeZonePreference.warning}</p>}
       <div className="chart-pair">
         {chain?.confirmation && chain.confirmation.symbol === chain.referenceSymbol && confirmationChartPoints.length > 0 && <PriceChart
           title={instruments.find((instrument) => instrument.symbol === chain.confirmation?.symbol)?.label ?? chain.confirmation.symbol}
@@ -344,6 +439,7 @@ export default function App() {
           spot={confirmationPrice}
           showAllWalls={showAllWalls}
           showGex={showGex}
+          timeZone={timeZone}
           levelDetails={explainChartLevel}
           lineColor="#72bda5"
           legend={chartLegend}
@@ -357,6 +453,7 @@ export default function App() {
           spot={price ?? null}
           showAllWalls={showAllWalls}
           showGex={showGex}
+          timeZone={timeZone}
           levelDetails={explainChartLevel}
           lineColor="#55c99b"
           legend={showGex ? [...chartLegend, ...gexLegend] : chartLegend}
@@ -370,6 +467,7 @@ export default function App() {
           spot={confirmationPrice}
           showAllWalls={showAllWalls}
           showGex={showGex}
+          timeZone={timeZone}
           levelDetails={explainChartLevel}
           lineColor="#72bda5"
           legend={chartLegend}
@@ -501,7 +599,7 @@ export default function App() {
             </tbody>
           </table>
         </div>
-        <footer className="panel-footer"><span>DATA: {activeInstrument?.dataSource ?? 'YAHOO FINANCE'} <HelpTip label="Źródła i opóźnienie danych" text={helpText.source} /></span><span>{updatedAt ? `UPDATED ${updatedAt}` : 'AWAITING MARKET DATA'} · DELAYED DATA MAY APPLY</span></footer>
+        <footer className="panel-footer"><span>DATA: {activeInstrument?.dataSource ?? 'YAHOO FINANCE'} <HelpTip label="Źródła i opóźnienie danych" text={helpText.source} /></span><span>{updatedAt !== null ? `UPDATED ${new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short' }).format(updatedAt)}` : 'AWAITING MARKET DATA'} · DELAYED DATA MAY APPLY</span></footer>
       </section>
       <footer className="page-footer"><span>Market Desk</span><span>For informational purposes only. Not investment advice.</span></footer>
     </main>

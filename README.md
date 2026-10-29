@@ -8,6 +8,10 @@ QQQ, SPY and DIA option walls are also displayed in the corresponding cash index
 
 Charts show the two nearest selected put and call walls per chart by default. The shared **All walls** and **GEX + Flip** controls reveal additional lines without changing the tables or calculations. Overlapping labels are grouped on the chart; each value is shown below it, with full precision on hover. Distant levels do not expand the price scale and are listed separately below the chart.
 
+The scenarios panel above the charts describes every selected primary and ETF wall using its actual strike, distance from its own underlying's spot, selection metric, and any available confluence or ETF conversion. It shows conditional reactions based on whether the level is above or below spot, not probabilities or trading signals. OI and volume do not reveal dealer positioning or predict whether a level will hold; displayed prices and options data may be delayed. ETF index conversions are approximations, not broker CFD prices.
+
+Chart axes, crosshair timestamps and the update time use the browser's time zone by default. The chart controls also allow selecting an IANA time zone; the choice is stored in this browser's local storage. Daylight-saving changes are handled per timestamp, without changing the underlying market data or exchange-session and expiration dates.
+
 Information buttons explain the displayed market data, wall selection, confluence, ETF conversion, and the GEX/flip estimates. Open them with a pointer, keyboard focus, or tap; Escape dismisses the tooltip. GEX uses assumed call/put signs and the displayed flip is an interpolation between adjacent strike-level values, not an observed dealer position or a market-wide gamma-flip calculation.
 
 For DIA, the header displays the Dow Jones Industrial Average (`^DJI`) price, daily change, and session OHLC. The option chain, wall calculations, conversion, and main chart remain in DIA units.

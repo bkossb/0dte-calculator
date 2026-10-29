@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ColorType, createChart, LineStyle, type UTCTimestamp } from 'lightweight-charts';
+import { ColorType, createChart, LineStyle, type IChartApi, type UTCTimestamp } from 'lightweight-charts';
 import { chartLevelLabels, chartScaleBounds, groupChartLevels, selectChartLevels } from '../lib/chartLevels';
 import { display } from '../lib/format';
 import { chartLevelHelp } from '../lib/helpText';
+import { chartTimeFormatters } from '../lib/timeZone';
 import type { ChartLevel, ChartPoint } from '../types';
 import { HelpTip } from './HelpTip';
 
@@ -15,6 +16,7 @@ export function PriceChart({
   spot,
   showAllWalls,
   showGex,
+  timeZone,
   levelDetails,
   lineColor,
   legend,
@@ -28,12 +30,17 @@ export function PriceChart({
   spot: number | null;
   showAllWalls: boolean;
   showGex: boolean;
+  timeZone: string;
   levelDetails?: (level: ChartLevel) => string;
   lineColor: string;
   legend: { title: string; color: string; help: string }[];
   size?: 'compact' | 'featured';
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const timeFormatters = useMemo(() => chartTimeFormatters(timeZone, points), [timeZone, points]);
+  const timeFormattersRef = useRef(timeFormatters);
+  timeFormattersRef.current = timeFormatters;
   const [chartHeight, setChartHeight] = useState(340);
   const chartSpot = spot !== null && Number.isFinite(spot) ? spot : points.at(-1)?.value ?? 0;
   const visibleLevels = useMemo(() => selectChartLevels(levels, chartSpot, showAllWalls, showGex), [levels, chartSpot, showAllWalls, showGex]);
@@ -54,9 +61,11 @@ export function PriceChart({
       layout: { background: { type: ColorType.Solid, color: '#151c18' }, textColor: '#829087', fontFamily: 'DM Mono, monospace', fontSize: 10 },
       grid: { vertLines: { color: '#202a24' }, horzLines: { color: '#202a24' } },
       rightPriceScale: { borderColor: '#2a342e', scaleMargins: { top: 0.12, bottom: 0.12 } },
-      timeScale: { borderColor: '#2a342e', timeVisible: true, secondsVisible: false },
+      timeScale: { borderColor: '#2a342e', timeVisible: true, secondsVisible: false, tickMarkFormatter: timeFormattersRef.current.tickMarkFormatter },
+      localization: { timeFormatter: timeFormattersRef.current.timeFormatter },
       crosshair: { vertLine: { color: '#617469', style: LineStyle.Dotted }, horzLine: { color: '#617469', style: LineStyle.Dotted } },
     });
+    chartRef.current = chart;
     const priceSeries = chart.addAreaSeries({
       lineColor,
       topColor: `${lineColor}29`,
@@ -103,15 +112,23 @@ export function PriceChart({
     resizeObserver.observe(container);
     return () => {
       resizeObserver.disconnect();
+      chartRef.current = null;
       chart.remove();
     };
   }, [points, visibleLevels, lineColor, bounds, labels]);
+
+  useEffect(() => {
+    chartRef.current?.applyOptions({
+      timeScale: { tickMarkFormatter: timeFormatters.tickMarkFormatter },
+      localization: { timeFormatter: timeFormatters.timeFormatter },
+    });
+  }, [timeFormatters]);
 
   return (
     <section className={`chart-panel ${size === 'featured' ? 'chart-featured' : 'chart-compact'}`} aria-label={`${title} intraday price chart`}>
       <div className="chart-heading">
         <div><h2>{title} <span className="chart-source">{source}</span></h2><span className="chain-caption">{subtitle}</span></div>
-        <span className="expiry-badge">1D</span>
+        <span className="expiry-badge">1D · {timeZone}</span>
       </div>
       {points.length ? <div className="chart-canvas" ref={containerRef} /> : <div className="chart-empty">Intraday history is unavailable.</div>}
       {points.length > 0 && (groups.length > 0 || outsideLevels.length > 0) && <div className="chart-level-details" aria-label={`${title} grouped and off-scale levels`}>

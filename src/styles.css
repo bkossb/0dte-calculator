@@ -66,6 +66,37 @@ h1 { margin: 0; font-size: 45px; line-height: 1.1; letter-spacing: -.025em; font
 .icon-button:hover { border-color: #607466; color: var(--mint); }
 .icon-button:disabled { opacity: .5; cursor: default; }
 .spinning svg { animation: spin .8s linear infinite; }
+.analysis-panel { margin: 15px 0; border: 1px solid #35483b; border-radius: 5px; background: rgba(21, 28, 24, .93); }
+.analysis-heading { display: flex; justify-content: space-between; gap: 20px; padding: 18px 19px; border-bottom: 1px solid var(--line); }
+.analysis-eyebrow { margin-bottom: 7px; color: var(--mint); font-family: var(--mono); font-size: 9px; letter-spacing: .08em; }
+.analysis-heading h2 { margin-bottom: 5px; }
+.analysis-heading p { max-width: 760px; margin: 0; color: #a4b0a7; font-size: 11px; line-height: 1.5; }
+.analysis-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex-shrink: 0; color: var(--muted); font-family: var(--mono); font-size: 9px; text-align: right; }
+.analysis-warning { margin: 14px 19px 0; color: #e4c47d; font-size: 11px; line-height: 1.5; }
+.analysis-group { padding: 16px 19px 19px; }
+.analysis-group + .analysis-group { border-top: 1px solid var(--line); }
+.analysis-group-heading { display: flex; align-items: baseline; gap: 12px; margin-bottom: 11px; }
+.analysis-group-heading h3 { margin: 0; color: #e3e9e4; font-size: 13px; }
+.analysis-group-heading span { color: var(--muted); font-family: var(--mono); font-size: 9px; }
+.analysis-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr)); gap: 10px; }
+.analysis-card { min-width: 0; padding: 13px; border: 1px solid #303c33; border-left: 2px solid; border-radius: 4px; background: #19221c; }
+.analysis-put { border-left-color: var(--coral); }
+.analysis-call { border-left-color: var(--mint); }
+.analysis-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.analysis-side { font-family: var(--mono); font-size: 9px; }
+.analysis-card-heading strong { color: #e3e9e4; font-family: var(--mono); font-size: 15px; font-weight: 500; }
+.analysis-distance { margin: 7px 0; color: #c4cfc6; font-family: var(--mono); font-size: 10px; }
+.analysis-basis, .analysis-conversion, .analysis-empty { color: #a4b0a7; font-size: 11px; line-height: 1.5; }
+.analysis-basis, .analysis-conversion { margin: 6px 0; }
+.analysis-conversion { color: #d7bd81; }
+.analysis-empty { margin: 14px 19px; }
+.analysis-group .analysis-empty { margin: 0; }
+.analysis-scenarios { margin: 9px 0 0; padding-left: 16px; color: #d2dbd4; font-size: 11px; line-height: 1.5; }
+.analysis-scenarios li + li { margin-top: 3px; }
+@media (max-width: 600px) {
+  .analysis-heading { flex-direction: column; gap: 10px; }
+  .analysis-meta { align-items: flex-start; text-align: left; }
+}
 .metrics { display: grid; grid-template-columns: repeat(4, 1fr); margin: 0 0 15px; border: 1px solid var(--line); border-top: 0; background: #141a16; }
 .metric { min-height: 94px; position: relative; display: flex; flex-direction: column; justify-content: center; padding: 14px 19px; border-right: 1px solid var(--line); }
 .metric:last-child { border-right: 0; }
@@ -74,6 +105,10 @@ h1 { margin: 0; font-size: 45px; line-height: 1.1; letter-spacing: -.025em; font
 .metric-detail { position: absolute; right: 18px; bottom: 17px; color: #67736a; font-size: 8px; }
 .metric-detail.call-color, .metric-detail.put-color { color: inherit; }
 .chart-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 0; }
+.time-zone-control { display: inline-flex; align-items: center; gap: 7px; margin-left: auto; }
+.time-zone-control select { max-width: min(230px, 55vw); padding: 7px; border: 1px solid #354139; border-radius: 4px; background: #141a16; color: #d7ded9; font-family: var(--mono); font-size: 9px; }
+.time-zone-control select:focus-visible { outline: 2px solid #a9e3c9; outline-offset: 2px; }
+.time-zone-warning { margin: 0 0 10px; }
 .chart-toggle { padding: 7px 10px; border: 1px solid #354139; border-radius: 4px; background: #141a16; color: #aab4ac; font-family: var(--mono); font-size: 9px; cursor: pointer; }
 .chart-toggle[aria-pressed="true"] { border-color: #55c99b; color: #a9e3c9; }
 .chart-toggle:focus-visible { outline: 2px solid #a9e3c9; outline-offset: 2px; }
