@@ -48,6 +48,26 @@ async function getYahooSession() {
   return cachedYahooSession;
 }
 
+async function fetchYahooOptions(url) {
+  let session = await getYahooSession();
+  const requestUrl = new URL(url);
+  requestUrl.searchParams.set('crumb', session.crumb);
+  let upstream = await fetch(requestUrl, {
+    headers: { ...YAHOO_HEADERS, Cookie: session.cookie },
+  });
+
+  if (upstream.status === 401 || upstream.status === 403) {
+    if (cachedYahooSession === session) cachedYahooSession = null;
+    session = await getYahooSession();
+    requestUrl.searchParams.set('crumb', session.crumb);
+    upstream = await fetch(requestUrl, {
+      headers: { ...YAHOO_HEADERS, Cookie: session.cookie },
+    });
+  }
+
+  return upstream;
+}
+
 export default async function handler(request, response) {
   const symbol = String(request.query.symbol || 'QQQ').trim().toUpperCase();
   const expiration = request.query.date ? Number(request.query.date) : null;
@@ -90,11 +110,10 @@ export default async function handler(request, response) {
   futuresDailyUrl.searchParams.set('interval', '1d');
 
   try {
-    const { cookie, crumb } = await getYahooSession();
-    url.searchParams.set('crumb', crumb);
+    const { cookie } = await getYahooSession();
     const requestHeaders = { ...YAHOO_HEADERS, Cookie: cookie };
     const [upstream, chartUpstream, dailyUpstream, referenceDailyUpstream, overnightUpstream, futuresDailyUpstream] = await Promise.all([
-      fetch(url, { headers: requestHeaders }),
+      fetchYahooOptions(url),
       fetch(chartUrl, { headers: requestHeaders }).catch(() => null),
       fetch(dailyUrl, { headers: requestHeaders }).catch(() => null),
       symbol === market.referenceSymbol ? null : fetch(referenceDailyUrl, { headers: requestHeaders }).catch(() => null),
@@ -102,7 +121,7 @@ export default async function handler(request, response) {
       fetch(futuresDailyUrl, { headers: requestHeaders }).catch(() => null),
     ]);
     const [payload, chartPayload, dailyPayload, referenceDailyPayload, overnightPayload, futuresDailyPayload] = await Promise.all([
-      upstream.json(),
+      upstream.json().catch(() => null),
       chartUpstream?.ok ? chartUpstream.json().catch(() => null) : null,
       dailyUpstream?.ok ? dailyUpstream.json().catch(() => null) : null,
       referenceDailyUpstream?.ok ? referenceDailyUpstream.json().catch(() => null) : null,
@@ -112,7 +131,9 @@ export default async function handler(request, response) {
     const result = payload?.optionChain?.result?.[0];
 
     if (!upstream.ok || payload?.optionChain?.error || !result) {
-      const message = payload?.optionChain?.error?.description || 'Yahoo Finance nie zwrócił danych dla tego symbolu.';
+      const message = payload?.optionChain?.error?.description
+        || payload?.finance?.error?.description
+        || `Yahoo Finance zwrócił błąd HTTP ${upstream.status}.`;
       return response.status(upstream.status === 429 ? 429 : 502).json({ error: message });
     }
 
@@ -126,7 +147,7 @@ export default async function handler(request, response) {
     if (expiration && !hasRequestedExpiration) {
       const nearestUrl = new URL(url);
       nearestUrl.searchParams.delete('date');
-      const nearestResponse = await fetch(nearestUrl, { headers: requestHeaders });
+      const nearestResponse = await fetchYahooOptions(nearestUrl);
       const nearestPayload = nearestResponse.ok ? await nearestResponse.json().catch(() => null) : null;
       const nearestResult = nearestPayload?.optionChain?.result?.[0];
       const nearestOptions = nearestResult?.options?.find((options) => options.expirationDate >= expiration && hasContracts(options));
@@ -145,13 +166,12 @@ export default async function handler(request, response) {
     if (market.confirmationSymbol && selectedOptions?.expirationDate) {
       const confirmationUrl = new URL(`https://query1.finance.yahoo.com/v7/finance/options/${encodeURIComponent(market.confirmationSymbol)}`);
       confirmationUrl.searchParams.set('date', String(selectedOptions.expirationDate));
-      confirmationUrl.searchParams.set('crumb', crumb);
       const confirmationChartUrl = new URL(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(market.confirmationSymbol)}`);
       confirmationChartUrl.searchParams.set('range', range);
       confirmationChartUrl.searchParams.set('interval', CHART_RANGES[range]);
       confirmationChartUrl.searchParams.set('includePrePost', 'true');
       const [confirmationResponse, confirmationChartResponse] = await Promise.all([
-        fetch(confirmationUrl, { headers: requestHeaders }).catch(() => null),
+        fetchYahooOptions(confirmationUrl).catch(() => null),
         fetch(confirmationChartUrl, { headers: requestHeaders }).catch(() => null),
       ]);
       const [confirmationPayload, confirmationChartPayload] = await Promise.all([
