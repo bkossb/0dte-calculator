@@ -53,6 +53,9 @@ export type Chain = {
   todayOpen: number | null;
   todayHigh: number | null;
   todayLow: number | null;
+  confirmationTodayOpen: number | null;
+  confirmationTodayHigh: number | null;
+  confirmationTodayLow: number | null;
   referencePreviousDayHigh: number | null;
   referencePreviousDayDate: string | null;
   futuresPreviousDayHigh: number | null;

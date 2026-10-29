@@ -7,7 +7,7 @@ const INSTRUMENT_MARKETS = {
   QQQ: { cfdSymbol: 'US100', futuresSymbol: 'NQ=F', referenceSymbol: 'QQQ', confirmationSymbol: '^NDX', gexMultiplier: 100 },
   '^NDX': { cfdSymbol: 'US100', futuresSymbol: 'NQ=F', referenceSymbol: 'QQQ', confirmationSymbol: 'QQQ', gexMultiplier: 100 },
   '^SPX': { cfdSymbol: 'US500', futuresSymbol: 'ES=F', referenceSymbol: 'SPY', confirmationSymbol: 'SPY', gexMultiplier: 100 },
-  DIA: { cfdSymbol: 'US30', futuresSymbol: 'YM=F', referenceSymbol: 'DIA', gexMultiplier: 100 },
+  DIA: { cfdSymbol: 'US30', futuresSymbol: 'YM=F', referenceSymbol: 'DIA', confirmationSymbol: '^DJI', gexMultiplier: 100 },
   GLD: { cfdSymbol: 'XAUUSD', futuresSymbol: 'GC=F', referenceSymbol: 'GLD', gexMultiplier: 100 },
   '^GDAXI': { cfdSymbol: 'DE40', futuresSymbol: 'FDAX', referenceSymbol: '^GDAXI', eurexProductId: 3734540, eurexContractType: 'weekly', tvFuturesSymbol: 'EUREX:FDAX1!', gexMultiplier: 5 },
 };
@@ -540,23 +540,27 @@ export default async function handler(request, response) {
       const confirmationResult = confirmationPayload?.optionChain?.result?.[0];
       const confirmationOptions = confirmationResult?.options?.find((options) => options.expirationDate === selectedOptions.expirationDate && hasContracts(options));
 
-      if (confirmationOptions) {
-        const peerChart = confirmationChartPayload?.chart?.result?.[0];
-        const peerTimestamps = peerChart?.timestamp ?? [];
-        const peerCloses = peerChart?.indicators?.quote?.[0]?.close ?? [];
-        const confirmationDailyResult = sharesReferenceDaily
-          ? (symbol === market.referenceSymbol ? dailyPayload : referenceDailyPayload)?.chart?.result?.[0]
-          : confirmationDailyPayload?.chart?.result?.[0];
-        const confirmationPreviousSession = previousSession(confirmationDailyResult);
+      const peerChart = confirmationChartPayload?.chart?.result?.[0];
+      const peerTimestamps = peerChart?.timestamp ?? [];
+      const peerCloses = peerChart?.indicators?.quote?.[0]?.close ?? [];
+      const peerHistory = peerTimestamps.flatMap((time, index) => Number.isFinite(peerCloses[index]) ? [{ time, close: peerCloses[index] }] : []);
+      const confirmationDailyResult = sharesReferenceDaily
+        ? (symbol === market.referenceSymbol ? dailyPayload : referenceDailyPayload)?.chart?.result?.[0]
+        : confirmationDailyPayload?.chart?.result?.[0];
+      const confirmationPreviousSession = previousSession(confirmationDailyResult);
+      const peerPrice = confirmationResult?.quote?.regularMarketPrice ?? peerChart?.meta?.regularMarketPrice ?? null;
+
+      if (confirmationOptions || peerHistory.length) {
         confirmation = {
           symbol: market.confirmationSymbol,
-          price: confirmationResult.quote?.regularMarketPrice ?? null,
-          previousClose: confirmationPreviousSession?.close ?? confirmationResult.quote?.regularMarketPreviousClose ?? null,
+          price: peerPrice,
+          previousClose: confirmationPreviousSession?.close ?? confirmationResult?.quote?.regularMarketPreviousClose ?? null,
           previousDayHigh: confirmationPreviousSession?.high ?? null,
-          calls: confirmationOptions.calls ?? [],
-          puts: confirmationOptions.puts ?? [],
-          history: peerTimestamps.flatMap((time, index) => Number.isFinite(peerCloses[index]) ? [{ time, close: peerCloses[index] }] : []),
+          calls: confirmationOptions?.calls ?? [],
+          puts: confirmationOptions?.puts ?? [],
+          history: peerHistory,
         };
+        if (!confirmationOptions) confirmationWarning = `Brak chainu ${market.confirmationSymbol} dla tego samego terminu.`;
       } else {
         confirmationWarning = `Brak chainu ${market.confirmationSymbol} dla tego samego terminu.`;
       }
@@ -615,6 +619,9 @@ export default async function handler(request, response) {
       todayOpen: todaySession(dailyPayload?.chart?.result?.[0])?.open ?? null,
       todayHigh: todaySession(dailyPayload?.chart?.result?.[0])?.high ?? null,
       todayLow: todaySession(dailyPayload?.chart?.result?.[0])?.low ?? null,
+      confirmationTodayOpen: confirmation ? todaySession(confirmationDailyPayload?.chart?.result?.[0])?.open ?? null : null,
+      confirmationTodayHigh: confirmation ? todaySession(confirmationDailyPayload?.chart?.result?.[0])?.high ?? null : null,
+      confirmationTodayLow: confirmation ? todaySession(confirmationDailyPayload?.chart?.result?.[0])?.low ?? null : null,
       referencePreviousDayHigh: referencePreviousSession?.high ?? null,
       referencePreviousDayDate: referencePreviousSession?.date ?? null,
       futuresPreviousDayHigh: futuresPreviousSession?.high ?? null,

@@ -172,13 +172,27 @@ export default function App() {
     ...(chain?.gex?.callWall ? [{ price: chain.gex.callWall.strike, color: '#27ae60', title: 'GEX C' }] : []),
   ], [walls, price, chain?.previousDayHigh, chain?.previousDayClose, chain?.gex]);
   const confirmationChartPoints = useMemo(() => (chain?.confirmation?.history ?? []).map(({ time, close }) => ({ time, value: close })), [chain?.confirmation?.history]);
-  const confirmationChartLevels = useMemo(() => [
-    ...confirmationWalls.put.map((wall, index) => ({ price: wall.strike, color: '#f18270', title: `P${index + 1}` })),
-    ...(confirmationPrice !== null ? [{ price: confirmationPrice, color: '#d8e2da', title: 'SPOT' }] : []),
-    ...(chain?.confirmation?.previousDayHigh ? [{ price: chain.confirmation.previousDayHigh, color: '#f3c969', title: 'PDH' }] : []),
-    ...(chain?.confirmation?.previousClose ? [{ price: chain.confirmation.previousClose, color: '#7aa2f7', title: 'PDC' }] : []),
-    ...confirmationWalls.call.map((wall, index) => ({ price: wall.strike, color: '#55c99b', title: `C${index + 1}` })),
-  ], [confirmationWalls, confirmationPrice, chain?.confirmation?.previousDayHigh, chain?.confirmation?.previousClose]);
+  const confirmationChartLevels = useMemo(() => {
+    const hasChain = (chain?.confirmation?.calls?.length ?? 0) + (chain?.confirmation?.puts?.length ?? 0) > 0;
+    if (hasChain) {
+      return [
+        ...confirmationWalls.put.map((wall, index) => ({ price: wall.strike, color: '#f18270', title: `P${index + 1}` })),
+        ...(confirmationPrice !== null ? [{ price: confirmationPrice, color: '#d8e2da', title: 'SPOT' }] : []),
+        ...(chain?.confirmation?.previousDayHigh ? [{ price: chain.confirmation.previousDayHigh, color: '#f3c969', title: 'PDH' }] : []),
+        ...(chain?.confirmation?.previousClose ? [{ price: chain.confirmation.previousClose, color: '#7aa2f7', title: 'PDC' }] : []),
+        ...confirmationWalls.call.map((wall, index) => ({ price: wall.strike, color: '#55c99b', title: `C${index + 1}` })),
+      ];
+    }
+    const ratio = confirmationPrice && price ? confirmationPrice / price : null;
+    if (ratio === null) return [];
+    return [
+      ...walls.put.map((wall, index) => ({ price: wall.strike * ratio, color: '#f18270', title: `P${index + 1}` })),
+      ...(confirmationPrice !== null ? [{ price: confirmationPrice, color: '#d8e2da', title: 'SPOT' }] : []),
+      ...(chain?.confirmation?.previousDayHigh ? [{ price: chain.confirmation.previousDayHigh, color: '#f3c969', title: 'PDH' }] : []),
+      ...(chain?.confirmation?.previousClose ? [{ price: chain.confirmation.previousClose, color: '#7aa2f7', title: 'PDC' }] : []),
+      ...walls.call.map((wall, index) => ({ price: wall.strike * ratio, color: '#55c99b', title: `C${index + 1}` })),
+    ];
+  }, [confirmationWalls, confirmationPrice, chain?.confirmation?.previousDayHigh, chain?.confirmation?.previousClose, chain?.confirmation?.calls, chain?.confirmation?.puts, walls, price]);
 
   function selectInstrument(nextSymbol: string) {
     setSymbol(nextSymbol);
@@ -220,6 +234,13 @@ export default function App() {
               <span>O <strong>{currencySymbol}{display(chain.todayOpen)}</strong></span>
               <span>H <strong>{currencySymbol}{display(chain.todayHigh)}</strong></span>
               <span>L <strong>{currencySymbol}{display(chain.todayLow)}</strong></span>
+            </div>
+          )}
+          {chain?.confirmation && chain.confirmationTodayOpen !== null && chain.confirmationTodayOpen !== undefined && (
+            <div className="session-stats session-stats-confirmation">
+              <span>{chain.confirmation.symbol} O <strong>{currencySymbol}{display(chain.confirmationTodayOpen)}</strong></span>
+              <span>H <strong>{currencySymbol}{display(chain.confirmationTodayHigh)}</strong></span>
+              <span>L <strong>{currencySymbol}{display(chain.confirmationTodayLow)}</strong></span>
             </div>
           )}
         </div>
@@ -282,7 +303,7 @@ export default function App() {
         {chain?.confirmation && chain.confirmation.symbol !== chain.referenceSymbol && confirmationChartPoints.length > 0 && <PriceChart
           title={instruments.find((instrument) => instrument.symbol === chain.confirmation?.symbol)?.label ?? chain.confirmation.symbol}
           source={`${chain.confirmation.symbol} · 5 MIN`}
-          subtitle="PEER · SAME-DAY OPTIONS + SPOT"
+          subtitle={chain.confirmation.calls.length ? 'PEER · SAME-DAY OPTIONS + SPOT' : 'CASH INDEX · REFERENCE'}
           points={confirmationChartPoints}
           levels={confirmationChartLevels}
           lineColor="#72bda5"

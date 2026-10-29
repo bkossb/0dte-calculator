@@ -48,7 +48,10 @@ export function PriceChart({
     priceSeries.setData(chartData);
 
     if (levels.length) {
-      const allValues = [...points.map((point) => point.value), ...levels.map((level) => level.price)];
+      const spot = points.at(-1)?.value ?? 0;
+      const band = spot * 0.03;
+      const visibleLevels = levels.filter((level) => Math.abs(level.price - spot) <= band);
+      const allValues = [...points.map((point) => point.value), ...visibleLevels.map((level) => level.price)];
       const scaleSeries = chart.addLineSeries({
         color: 'rgba(0, 0, 0, 0)',
         lineVisible: false,
