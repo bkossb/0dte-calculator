@@ -19,7 +19,7 @@ type Contract = {
 type HistoryPoint = { time: number; close: number };
 type ChartPoint = { time: number; value: number };
 type ChartLevel = { price: number; color: string; title: string };
-type ConfirmationChain = { symbol: string; price: number | null; calls: Contract[]; puts: Contract[]; history: HistoryPoint[] };
+type ConfirmationChain = { symbol: string; price: number | null; previousClose: number | null; previousDayHigh: number | null; calls: Contract[]; puts: Contract[]; history: HistoryPoint[] };
 type WallConfluence = {
   contract: Contract;
   side: 'put' | 'call';
@@ -52,10 +52,12 @@ type Chain = {
   chartError: string | null;
   overnightError: string | null;
   previousDayHigh: number | null;
+  previousDayClose: number | null;
   previousDayDate: string | null;
   referencePreviousDayHigh: number | null;
   referencePreviousDayDate: string | null;
   futuresPreviousDayHigh: number | null;
+  futuresPreviousDayClose: number | null;
   futuresPreviousDayDate: string | null;
   fetchedAt: string;
 };
@@ -76,6 +78,14 @@ const instruments = [
 function display(value: number | null | undefined, digits = 2) {
   if (value === null || value === undefined || !Number.isFinite(value)) return '—';
   return value.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+
+function compact(value: number | null | undefined) {
+  return value === null || value === undefined || !Number.isFinite(value) ? '—' : compactFormat.format(value);
+}
+
+function percentage(value: number | null | undefined) {
+  return value === null || value === undefined || !Number.isFinite(value) ? '—' : percentFormat.format(value);
 }
 
 function expirationLabel(epoch: number) {
@@ -101,16 +111,26 @@ function heat(value: number, maximum: number, side: 'call' | 'put') {
   return { backgroundColor: `rgba(${color})` };
 }
 
+function wallMetric(contracts: Contract[]) {
+  const hasOpenInterest = contracts.some((contract) => Number.isFinite(contract.openInterest) && contract.openInterest > 0);
+  return (contract: Contract) => {
+    const openInterest = Number.isFinite(contract.openInterest) ? contract.openInterest : 0;
+    const volume = Number.isFinite(contract.volume) ? contract.volume : 0;
+    return hasOpenInterest && openInterest > 0 ? openInterest : volume;
+  };
+}
+
 function selectWallContracts(contracts: Contract[], spot: number | null, direction: 'above' | 'below', tolerance: number) {
   if (spot === null || spot <= 0) return [];
   const minimum = spot * (1 - tolerance);
   const maximum = spot * (1 + tolerance);
+  const metric = wallMetric(contracts);
   return contracts
-    .filter((contract) => Number.isFinite(contract.openInterest) && contract.openInterest > 0)
+    .filter((contract) => metric(contract) > 0)
     .filter((contract) => direction === 'above'
       ? contract.strike > spot && contract.strike <= maximum
       : contract.strike < spot && contract.strike >= minimum)
-    .sort((left, right) => right.openInterest - left.openInterest || Math.abs(left.strike - spot) - Math.abs(right.strike - spot))
+    .sort((left, right) => metric(right) - metric(left) || Math.abs(left.strike - spot) - Math.abs(right.strike - spot))
     .slice(0, 4)
     .sort((left, right) => left.strike - right.strike);
 }
@@ -271,7 +291,6 @@ export default function App() {
     const allStrikes = [...new Set([...callMap.keys(), ...putMap.keys()])].sort((a, b) => a - b);
     return allStrikes.map((strike) => ({ strike, call: callMap.get(strike), put: putMap.get(strike) }));
   }, [chain]);
-
   const price = chain?.quote.price;
   const wallTolerance = symbol === '^NDX' || symbol === '^SPX' ? CASH_INDEX_WALL_TOLERANCE : WALL_TOLERANCE;
   const walls = useMemo(() => {
@@ -287,8 +306,18 @@ export default function App() {
   }), [chain?.confirmation, confirmationPrice, wallTolerance]);
   const wallStrikes = new Set([...walls.call, ...walls.put].map((wall) => wall.strike));
   const wallRows = strikes.filter((row) => wallStrikes.has(row.strike));
-  const openInterest = (contract: Contract) => Number.isFinite(contract.openInterest) ? contract.openInterest : 0;
-  const maxOi = Math.max(0, ...(chain?.calls ?? []).map(openInterest), ...(chain?.puts ?? []).map(openInterest));
+  const showNearestStrikes = wallRows.length === 0 && strikes.length > 0;
+  const displayedRows = showNearestStrikes
+    ? [...strikes]
+      .sort((left, right) => Math.abs(left.strike - (price ?? 0)) - Math.abs(right.strike - (price ?? 0)))
+      .slice(0, 8)
+      .sort((left, right) => left.strike - right.strike)
+    : wallRows;
+  const callMetric = wallMetric(chain?.calls ?? []);
+  const putMetric = wallMetric(chain?.puts ?? []);
+  const maxCallMetric = Math.max(0, ...(chain?.calls ?? []).map(callMetric));
+  const maxPutMetric = Math.max(0, ...(chain?.puts ?? []).map(putMetric));
+  const wallsByVolume = [...walls.call, ...walls.put].some((contract) => !Number.isFinite(contract.openInterest) || contract.openInterest <= 0);
   const optionsUnavailableMessage = chain?.optionsError
     ? `${chain.optionsError}${chain.expirations[0] ? ` Najbliższy termin: ${expirationLabel(chain.expirations[0])}.` : ''}`
     : '';
@@ -313,19 +342,23 @@ export default function App() {
     const confirmation = chain?.confirmation;
     const confirmationPrice = confirmation?.price ?? null;
     const usedConfirmationContracts = new Set<string>();
+    const confirmationPuts = confirmation?.puts ?? [];
+    const confirmationCalls = confirmation?.calls ?? [];
+    const confirmationMetrics = { put: wallMetric(confirmationPuts), call: wallMetric(confirmationCalls) };
     const confirmationWalls = {
-      put: confirmationPrice ? (confirmation?.puts ?? []).filter((contract) => Number.isFinite(contract.openInterest) && contract.openInterest > 0 && contract.strike < confirmationPrice && contract.strike >= confirmationPrice * (1 - WALL_TOLERANCE)).sort((a, b) => b.openInterest - a.openInterest).slice(0, 4) : [],
-      call: confirmationPrice ? (confirmation?.calls ?? []).filter((contract) => Number.isFinite(contract.openInterest) && contract.openInterest > 0 && contract.strike > confirmationPrice && contract.strike <= confirmationPrice * (1 + WALL_TOLERANCE)).sort((a, b) => b.openInterest - a.openInterest).slice(0, 4) : [],
+      put: confirmationPrice ? confirmationPuts.filter((contract) => confirmationMetrics.put(contract) > 0 && contract.strike < confirmationPrice && contract.strike >= confirmationPrice * (1 - WALL_TOLERANCE)).sort((a, b) => confirmationMetrics.put(b) - confirmationMetrics.put(a)).slice(0, 4) : [],
+      call: confirmationPrice ? confirmationCalls.filter((contract) => confirmationMetrics.call(contract) > 0 && contract.strike > confirmationPrice && contract.strike <= confirmationPrice * (1 + WALL_TOLERANCE)).sort((a, b) => confirmationMetrics.call(b) - confirmationMetrics.call(a)).slice(0, 4) : [],
     };
 
     return primaryWalls.map(({ contract, side, label }) => {
       const offsetPct = price ? (contract.strike / price - 1) * 100 : 0;
+      const sideMetric = confirmationMetrics[side];
       const matches = confirmationPrice
         ? confirmationWalls[side]
           .filter((candidate) => !usedConfirmationContracts.has(candidate.contractSymbol))
           .map((candidate) => ({ contract: candidate, offsetPct: (candidate.strike / confirmationPrice - 1) * 100 }))
           .filter((candidate) => Math.abs(candidate.offsetPct - offsetPct) <= CONFLUENCE_TOLERANCE_PCT)
-          .sort((left, right) => Math.abs(left.offsetPct - offsetPct) - Math.abs(right.offsetPct - offsetPct) || right.contract.openInterest - left.contract.openInterest)
+          .sort((left, right) => Math.abs(left.offsetPct - offsetPct) - Math.abs(right.offsetPct - offsetPct) || sideMetric(right.contract) - sideMetric(left.contract))
         : [];
       const match = matches[0] ?? null;
       if (match) usedConfirmationContracts.add(match.contract.contractSymbol);
@@ -353,39 +386,45 @@ export default function App() {
   const scaleMaximum = levelMaximum + levelSpan * 0.12;
   const levelPosition = (value: number) => `${((value - scaleMinimum) / (scaleMaximum - scaleMinimum)) * 100}%`;
   const cfdScale = cfdToFuturesFactor ?? 1;
-  const toCfdLevel = (value: number) => conversionFactor === null || !chain?.previousDayHigh
-    ? null
-    : cfdHigh * value / chain.previousDayHigh;
+  const toCfdLevel = (value: number) => {
+    if (!chain?.previousDayHigh || !chain?.futuresPreviousDayHigh) return null;
+    return cfdScale * chain.futuresPreviousDayHigh * value / chain.previousDayHigh;
+  };
   const cfdChartLevels = useMemo(() => {
-    const mapped = (value: number) => conversionFactor === null || !chain?.previousDayHigh
-      ? null
-      : cfdHigh * value / chain.previousDayHigh;
+    const mapped = (value: number) => {
+      if (!chain?.previousDayHigh || !chain?.futuresPreviousDayHigh) return null;
+      return cfdScale * chain.futuresPreviousDayHigh * value / chain.previousDayHigh;
+    };
     return [
-      ...(conversionFactor !== null ? wallConfluence.filter((wall) => wall.side === 'put').flatMap((wall) => {
+      ...wallConfluence.filter((wall) => wall.side === 'put').flatMap((wall) => {
         const mappedPrice = mapped(wall.consensusStrike);
         return mappedPrice === null ? [] : [{ price: mappedPrice, color: '#f18270', title: wall.confirmation ? `${wall.label} CONF` : wall.label }];
-      }) : []),
+      }),
       ...(price !== null && price !== undefined && mapped(price) !== null ? [{ price: mapped(price)!, color: '#d8e2da', title: 'SPOT' }] : []),
       ...(cfdHigh > 0 ? [{ price: cfdHigh, color: '#f3c969', title: 'CFD PDH' }] : chain?.futuresPreviousDayHigh ? [{ price: chain.futuresPreviousDayHigh, color: '#f3c969', title: `${futuresSymbol} PDH` }] : []),
-      ...(conversionFactor !== null ? wallConfluence.filter((wall) => wall.side === 'call').flatMap((wall) => {
+      ...(chain?.futuresPreviousDayClose ? [{ price: chain.futuresPreviousDayClose * cfdScale, color: '#7aa2f7', title: cfdHigh > 0 ? `${cfdSymbol} PDC` : `${futuresSymbol} PDC` }] : []),
+      ...wallConfluence.filter((wall) => wall.side === 'call').flatMap((wall) => {
         const mappedPrice = mapped(wall.consensusStrike);
         return mappedPrice === null ? [] : [{ price: mappedPrice, color: '#55c99b', title: wall.confirmation ? `${wall.label} CONF` : wall.label }];
-      }) : []),
+      }),
     ];
-  }, [wallConfluence, price, chain?.previousDayHigh, chain?.futuresPreviousDayHigh, conversionFactor, cfdHigh, futuresSymbol]);
+  }, [wallConfluence, price, chain?.previousDayHigh, chain?.futuresPreviousDayHigh, chain?.futuresPreviousDayClose, cfdHigh, cfdScale, cfdSymbol, futuresSymbol]);
   const instrumentChartPoints = useMemo(() => (chain?.history ?? []).map(({ time, close }) => ({ time, value: close })), [chain?.history]);
   const instrumentChartLevels = useMemo(() => [
-    ...wallConfluence.filter((wall) => wall.side === 'put').map((wall) => ({ price: wall.consensusStrike, color: '#f18270', title: wall.confirmation ? `${wall.label} CONF` : wall.label })),
+    ...walls.put.map((wall, index) => ({ price: wall.strike, color: '#f18270', title: `P${index + 1}` })),
     ...(price !== null && price !== undefined ? [{ price, color: '#d8e2da', title: 'SPOT' }] : []),
     ...(chain?.previousDayHigh ? [{ price: chain.previousDayHigh, color: '#f3c969', title: 'PDH' }] : []),
-    ...wallConfluence.filter((wall) => wall.side === 'call').map((wall) => ({ price: wall.consensusStrike, color: '#55c99b', title: wall.confirmation ? `${wall.label} CONF` : wall.label })),
-  ], [wallConfluence, price, chain?.previousDayHigh]);
+    ...(chain?.previousDayClose ? [{ price: chain.previousDayClose, color: '#7aa2f7', title: 'PDC' }] : []),
+    ...walls.call.map((wall, index) => ({ price: wall.strike, color: '#55c99b', title: `C${index + 1}` })),
+  ], [walls, price, chain?.previousDayHigh, chain?.previousDayClose]);
   const confirmationChartPoints = useMemo(() => (chain?.confirmation?.history ?? []).map(({ time, close }) => ({ time, value: close })), [chain?.confirmation?.history]);
   const confirmationChartLevels = useMemo(() => [
     ...confirmationWalls.put.map((wall, index) => ({ price: wall.strike, color: '#f18270', title: `P${index + 1}` })),
     ...(confirmationPrice !== null ? [{ price: confirmationPrice, color: '#d8e2da', title: 'SPOT' }] : []),
+    ...(chain?.confirmation?.previousDayHigh ? [{ price: chain.confirmation.previousDayHigh, color: '#f3c969', title: 'PDH' }] : []),
+    ...(chain?.confirmation?.previousClose ? [{ price: chain.confirmation.previousClose, color: '#7aa2f7', title: 'PDC' }] : []),
     ...confirmationWalls.call.map((wall, index) => ({ price: wall.strike, color: '#55c99b', title: `C${index + 1}` })),
-  ], [confirmationWalls, confirmationPrice]);
+  ], [confirmationWalls, confirmationPrice, chain?.confirmation?.previousDayHigh, chain?.confirmation?.previousClose]);
   const overnightChartPoints = useMemo(() => (chain?.overnightHistory ?? []).map(({ time, close }) => ({ time, value: close * cfdScale })), [chain?.overnightHistory, cfdScale]);
 
   function selectInstrument(nextSymbol: string) {
@@ -469,7 +508,7 @@ export default function App() {
           points={confirmationChartPoints}
           levels={confirmationChartLevels}
           lineColor="#72bda5"
-          legend={[{ title: 'PUT WALLS', color: '#f18270' }, { title: 'SPOT', color: '#d8e2da' }, { title: 'CALL WALLS', color: '#55c99b' }]}
+          legend={[{ title: 'PUT WALLS', color: '#f18270' }, { title: 'SPOT', color: '#d8e2da' }, { title: 'PDH', color: '#f3c969' }, { title: 'PDC', color: '#7aa2f7' }, { title: 'CALL WALLS', color: '#55c99b' }]}
         />}
         <PriceChart
           title={activeInstrument?.label ?? symbol}
@@ -478,7 +517,7 @@ export default function App() {
           points={instrumentChartPoints}
           levels={instrumentChartLevels}
           lineColor="#55c99b"
-          legend={[{ title: 'PUT WALLS', color: '#f18270' }, { title: 'SPOT', color: '#d8e2da' }, { title: 'PDH', color: '#f3c969' }, { title: 'CALL WALLS', color: '#55c99b' }]}
+          legend={[{ title: 'PUT WALLS', color: '#f18270' }, { title: 'SPOT', color: '#d8e2da' }, { title: 'PDH', color: '#f3c969' }, { title: 'PDC', color: '#7aa2f7' }, { title: 'CALL WALLS', color: '#55c99b' }]}
         />
         {chain?.confirmation && chain.confirmation.symbol !== chain.referenceSymbol && confirmationChartPoints.length > 0 && <PriceChart
           title={instruments.find((instrument) => instrument.symbol === chain.confirmation?.symbol)?.label ?? chain.confirmation.symbol}
@@ -487,7 +526,7 @@ export default function App() {
           points={confirmationChartPoints}
           levels={confirmationChartLevels}
           lineColor="#72bda5"
-          legend={[{ title: 'PUT WALLS', color: '#f18270' }, { title: 'SPOT', color: '#d8e2da' }, { title: 'CALL WALLS', color: '#55c99b' }]}
+          legend={[{ title: 'PUT WALLS', color: '#f18270' }, { title: 'SPOT', color: '#d8e2da' }, { title: 'PDH', color: '#f3c969' }, { title: 'PDC', color: '#7aa2f7' }, { title: 'CALL WALLS', color: '#55c99b' }]}
         />}
         <PriceChart
           title={`${cfdSymbol} overnight`}
@@ -496,7 +535,7 @@ export default function App() {
           points={overnightChartPoints}
           levels={cfdChartLevels}
           lineColor="#e0ad5a"
-          legend={[{ title: 'PUT WALLS', color: '#f18270' }, { title: cfdHigh > 0 ? `${cfdSymbol} PDH` : `${futuresSymbol} PDH`, color: '#f3c969' }, { title: `${cfdSymbol} SPOT`, color: '#d8e2da' }, { title: 'CALL WALLS', color: '#55c99b' }]}
+          legend={[{ title: 'PUT WALLS', color: '#f18270' }, { title: cfdHigh > 0 ? `${cfdSymbol} PDH` : `${futuresSymbol} PDH`, color: '#f3c969' }, { title: cfdHigh > 0 ? `${cfdSymbol} PDC` : `${futuresSymbol} PDC`, color: '#7aa2f7' }, { title: `${cfdSymbol} SPOT`, color: '#d8e2da' }, { title: 'CALL WALLS', color: '#55c99b' }]}
         />
       </div>
 
@@ -584,8 +623,10 @@ export default function App() {
         <div className="chain-heading">
           <div>
             <h2>Wall strikes</h2>
-            <span className="chain-caption">TOP 4 CALLS + PUTS · WITHIN ±{display(wallTolerance * 100, 0)}% SPOT</span>
+            <span className="chain-caption">{showNearestStrikes ? 'NEAREST AVAILABLE STRIKES · WALL LEVELS NEED OPEN INTEREST' : `TOP 4 CALLS + PUTS · WITHIN ±${display(wallTolerance * 100, 0)}% SPOT${wallsByVolume ? ' · BY VOLUME' : ''}`}</span>
             {chain?.optionsWarning && <p className="options-warning">{chain.optionsWarning}</p>}
+            {wallsByVolume && !showNearestStrikes && <p className="options-warning">Open interest unavailable; walls ranked by volume.</p>}
+            {showNearestStrikes && <p className="options-warning">No open-interest walls found; showing the nearest available options.</p>}
           </div>
           <span className="expiry-badge">{chain?.isNearestExpiration ? 'NEAREST · ' : ''}{expiration ? expirationLabel(Number(expiration)) : 'SELECT EXPIRATION'}</span>
         </div>
@@ -606,14 +647,14 @@ export default function App() {
               {loading ? <tr><td className="table-message" colSpan={11}><span className="loader" /> Loading option chain</td></tr>
                 : error ? <tr><td className="table-message error-message" colSpan={11}>{error}</td></tr>
                   : chain?.optionsError ? <tr><td className="table-message" colSpan={11}>{optionsUnavailableMessage}</td></tr>
-                    : wallRows.length === 0 ? <tr><td className="table-message" colSpan={11}>No wall levels found for this expiration.</td></tr>
-                    : wallRows.map(({ strike, call, put }) => {
+                    : displayedRows.length === 0 ? <tr><td className="table-message" colSpan={11}>No options found for this expiration.</td></tr>
+                    : displayedRows.map(({ strike, call, put }) => {
                       const callRank = walls.call.findIndex((wall) => wall.strike === strike);
                       const putRank = walls.put.findIndex((wall) => wall.strike === strike);
                       return <tr key={strike}>
-                        <td className="call-cell oi-cell" style={heat(call?.openInterest ?? 0, maxOi, 'call')}>{call ? compactFormat.format(call.openInterest) : '—'}</td>
-                        <td className="call-cell">{call ? compactFormat.format(call.volume) : '—'}</td>
-                        <td className="call-cell">{call ? percentFormat.format(call.impliedVolatility) : '—'}</td>
+                        <td className="call-cell oi-cell" style={heat(call ? callMetric(call) : 0, maxCallMetric, 'call')}>{call ? compact(call.openInterest) : '—'}</td>
+                        <td className="call-cell">{call ? compact(call.volume) : '—'}</td>
+                        <td className="call-cell">{call ? percentage(call.impliedVolatility) : '—'}</td>
                         <td className="call-cell quote-cell">{call ? display(call.bid) : '—'}</td>
                         <td className="call-cell quote-cell">{call ? display(call.ask) : '—'}</td>
                         <td className="strike-cell">
@@ -625,9 +666,9 @@ export default function App() {
                         </td>
                         <td className="put-cell quote-cell">{put ? display(put.bid) : '—'}</td>
                         <td className="put-cell quote-cell">{put ? display(put.ask) : '—'}</td>
-                        <td className="put-cell">{put ? percentFormat.format(put.impliedVolatility) : '—'}</td>
-                        <td className="put-cell">{put ? compactFormat.format(put.volume) : '—'}</td>
-                        <td className="put-cell oi-cell" style={heat(put?.openInterest ?? 0, maxOi, 'put')}>{put ? compactFormat.format(put.openInterest) : '—'}</td>
+                        <td className="put-cell">{put ? percentage(put.impliedVolatility) : '—'}</td>
+                        <td className="put-cell">{put ? compact(put.volume) : '—'}</td>
+                        <td className="put-cell oi-cell" style={heat(put ? putMetric(put) : 0, maxPutMetric, 'put')}>{put ? compact(put.openInterest) : '—'}</td>
                       </tr>;
                     })}
             </tbody>

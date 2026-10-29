@@ -23,9 +23,10 @@ function newYorkDate(timestamp) {
 function previousSession(dailyResult) {
   const timestamps = dailyResult?.timestamp ?? [];
   const highs = dailyResult?.indicators?.quote?.[0]?.high ?? [];
+  const closes = dailyResult?.indicators?.quote?.[0]?.close ?? [];
   const todayInNewYork = newYorkDate(Date.now() / 1000);
   return timestamps
-    .map((time, index) => ({ time, high: highs[index], date: newYorkDate(time) }))
+    .map((time, index) => ({ time, high: highs[index], close: closes[index], date: newYorkDate(time) }))
     .filter((bar) => bar.date < todayInNewYork && Number.isFinite(bar.high))
     .at(-1) ?? null;
 }
@@ -170,13 +171,19 @@ export default async function handler(request, response) {
       confirmationChartUrl.searchParams.set('range', range);
       confirmationChartUrl.searchParams.set('interval', CHART_RANGES[range]);
       confirmationChartUrl.searchParams.set('includePrePost', 'true');
-      const [confirmationResponse, confirmationChartResponse] = await Promise.all([
+      const sharesReferenceDaily = market.confirmationSymbol === market.referenceSymbol;
+      const confirmationDailyUrl = new URL(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(market.confirmationSymbol)}`);
+      confirmationDailyUrl.searchParams.set('range', '5d');
+      confirmationDailyUrl.searchParams.set('interval', '1d');
+      const [confirmationResponse, confirmationChartResponse, confirmationDailyResponse] = await Promise.all([
         fetchYahooOptions(confirmationUrl).catch(() => null),
         fetch(confirmationChartUrl, { headers: requestHeaders }).catch(() => null),
+        sharesReferenceDaily ? null : fetch(confirmationDailyUrl, { headers: requestHeaders }).catch(() => null),
       ]);
-      const [confirmationPayload, confirmationChartPayload] = await Promise.all([
+      const [confirmationPayload, confirmationChartPayload, confirmationDailyPayload] = await Promise.all([
         confirmationResponse?.ok ? confirmationResponse.json().catch(() => null) : null,
         confirmationChartResponse?.ok ? confirmationChartResponse.json().catch(() => null) : null,
+        confirmationDailyResponse?.ok ? confirmationDailyResponse.json().catch(() => null) : null,
       ]);
       const confirmationResult = confirmationPayload?.optionChain?.result?.[0];
       const confirmationOptions = confirmationResult?.options?.find((options) => options.expirationDate === selectedOptions.expirationDate && hasContracts(options));
@@ -185,9 +192,15 @@ export default async function handler(request, response) {
         const peerChart = confirmationChartPayload?.chart?.result?.[0];
         const peerTimestamps = peerChart?.timestamp ?? [];
         const peerCloses = peerChart?.indicators?.quote?.[0]?.close ?? [];
+        const confirmationDailyResult = sharesReferenceDaily
+          ? (symbol === market.referenceSymbol ? dailyPayload : referenceDailyPayload)?.chart?.result?.[0]
+          : confirmationDailyPayload?.chart?.result?.[0];
+        const confirmationPreviousSession = previousSession(confirmationDailyResult);
         confirmation = {
           symbol: market.confirmationSymbol,
           price: confirmationResult.quote?.regularMarketPrice ?? null,
+          previousClose: confirmationPreviousSession?.close ?? confirmationResult.quote?.regularMarketPreviousClose ?? null,
+          previousDayHigh: confirmationPreviousSession?.high ?? null,
           calls: confirmationOptions.calls ?? [],
           puts: confirmationOptions.puts ?? [],
           history: peerTimestamps.flatMap((time, index) => Number.isFinite(peerCloses[index]) ? [{ time, close: peerCloses[index] }] : []),
@@ -237,10 +250,12 @@ export default async function handler(request, response) {
       history,
       chartError: history.length ? null : chartPayload?.chart?.error?.description || 'Yahoo Finance nie zwrócił danych historycznych.',
       previousDayHigh: selectedPreviousSession?.high ?? null,
+      previousDayClose: selectedPreviousSession?.close ?? null,
       previousDayDate: selectedPreviousSession?.date ?? null,
       referencePreviousDayHigh: referencePreviousSession?.high ?? null,
       referencePreviousDayDate: referencePreviousSession?.date ?? null,
       futuresPreviousDayHigh: futuresPreviousSession?.high ?? null,
+      futuresPreviousDayClose: futuresPreviousSession?.close ?? null,
       futuresPreviousDayDate: futuresPreviousSession?.date ?? null,
       overnightHistory,
       overnightError: overnightHistory.length ? null : overnightResult?.meta?.symbol ? 'No overnight futures history.' : 'Nasdaq futures history is unavailable.',
