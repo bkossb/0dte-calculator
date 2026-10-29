@@ -145,3 +145,39 @@ test('DIA never substitutes its own quote when the DJI chart is unavailable', as
   assert.equal(response.body.confirmation.changePercent, null);
   assert.equal(response.body.confirmationTodayOpen, 600);
 });
+
+test('returns previous-session highs and dates for all ETF and index pairs', async (t) => {
+  const originalFetch = globalThis.fetch;
+  const previousTimestamp = Math.floor((Date.now() - 3 * 24 * 60 * 60 * 1000) / 1000);
+  const expectedDate = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date(previousTimestamp * 1000));
+  globalThis.fetch = (input) => {
+    const url = new URL(input);
+    if (url.pathname.includes('/finance/chart/') && url.searchParams.get('interval') === '1d') {
+      const symbol = decodeURIComponent(url.pathname.split('/').at(-1));
+      const [open, high, low] = dailyValues[symbol] ?? [1, 2, 0];
+      return Promise.resolve(Response.json({
+        chart: { result: [{
+          timestamp: [previousTimestamp],
+          indicators: { quote: [{ open: [open], high: [high], low: [low], close: [open] }] },
+        }] },
+      }));
+    }
+    return mockFetch(input);
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  for (const [symbol, peer] of [['^NDX', 'QQQ'], ['^SPX', 'SPY'], ['DIA', '^DJI']]) {
+    const response = await request(symbol);
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.body.previousDayHigh, dailyValues[symbol][1]);
+    assert.equal(response.body.previousDayDate, expectedDate);
+    assert.equal(response.body.confirmation.previousDayHigh, dailyValues[peer][1]);
+    assert.equal(response.body.confirmation.previousDayDate, expectedDate);
+    if (symbol !== 'DIA') {
+      assert.equal(response.body.referencePreviousDayHigh, dailyValues[peer][1]);
+      assert.equal(response.body.referencePreviousDayDate, expectedDate);
+    }
+  }
+});

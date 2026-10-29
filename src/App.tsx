@@ -1,25 +1,34 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, ArrowDown, ArrowUp, ChevronDown, RefreshCw, Search } from 'lucide-react';
-import type { Chain, WallConfluence } from './types';
+import type { Chain, ChartLevel, WallConfluence } from './types';
 import { CONFLUENCE_TOLERANCE_PCT, instruments } from './config/instruments';
 import { compact, display, expirationLabel, heat, numberFormat, percentage, todayExpiration } from './lib/format';
+import { etfToCashFactor } from './lib/etfConversion';
+import { helpText } from './lib/helpText';
 import { selectWallContracts, wallMetric } from './lib/walls';
+import { HelpTip } from './components/HelpTip';
 import { PriceChart } from './components/PriceChart';
 
+const chartLegend = [
+  { title: 'PUT WALLS', color: '#f18270', help: helpText.walls },
+  { title: 'SPOT', color: '#d8e2da', help: helpText.spot },
+  { title: 'PDH', color: '#f3c969', help: helpText.pdh },
+  { title: 'PDC', color: '#7aa2f7', help: helpText.pdc },
+  { title: 'CALL WALLS', color: '#55c99b', help: helpText.walls },
+];
 export default function App() {
   const [symbol, setSymbol] = useState('^NDX');
-  const [cfdPreviousHighs, setCfdPreviousHighs] = useState<Record<string, string>>({ US100: '', US500: '', US30: '', XAUUSD: '', DE40: '' });
   const [chain, setChain] = useState<Chain | null>(null);
   const [expiration, setExpiration] = useState(todayExpiration());
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [updatedAt, setUpdatedAt] = useState('');
+  const [showAllWalls, setShowAllWalls] = useState(false);
+  const [showGex, setShowGex] = useState(false);
   const requestIdRef = useRef(0);
   const activeInstrument = instruments.find((instrument) => instrument.symbol === symbol);
   const cfdSymbol = activeInstrument?.cfdSymbol ?? chain?.cfdSymbol ?? 'US100';
-  const cfdPreviousHigh = cfdPreviousHighs[cfdSymbol] ?? '';
-  const cfdHigh = Number(cfdPreviousHigh);
 
   async function loadChain(nextSymbol = symbol, date = todayExpiration(), refresh = false) {
     const requestId = ++requestIdRef.current;
@@ -106,10 +115,6 @@ export default function App() {
   const headerTodayLow = headerQuoteSymbol ? chain?.confirmationTodayLow : chain?.todayLow;
   const changePositive = (headerChangePercent ?? 0) >= 0;
   const currencySymbol = chain?.quote.currency === 'EUR' ? '€' : '$';
-  const cfdToUnderlyingFactor = cfdHigh > 0 && chain?.previousDayHigh
-    ? cfdHigh / chain.previousDayHigh
-    : null;
-  const conversionFactor = cfdToUnderlyingFactor;
   const primaryWalls = [
     ...walls.put.map((contract, index) => ({ contract, side: 'put' as const, label: `P${index + 1}` })),
     ...walls.call.map((contract, index) => ({ contract, side: 'call' as const, label: `C${index + 1}` })),
@@ -152,7 +157,18 @@ export default function App() {
       };
     });
   }, [primaryWalls, chain?.confirmation, price]);
-  const cfdLevels = wallConfluence;
+  const etfSymbol = symbol === '^NDX' ? 'QQQ' : symbol === '^SPX' ? 'SPY' : symbol === 'DIA' ? 'DIA' : null;
+  const cashSymbol = symbol === 'DIA' ? '^DJI' : etfSymbol ? symbol : null;
+  const etfHigh = symbol === 'DIA' ? chain?.previousDayHigh : chain?.referencePreviousDayHigh;
+  const etfDate = symbol === 'DIA' ? chain?.previousDayDate : chain?.referencePreviousDayDate;
+  const cashHigh = symbol === 'DIA' ? chain?.confirmation?.previousDayHigh : chain?.previousDayHigh;
+  const cashDate = symbol === 'DIA' ? chain?.confirmation?.previousDayDate : chain?.previousDayDate;
+  const etfFactor = etfToCashFactor(etfHigh, etfDate, cashHigh, cashDate);
+  const etfWalls = symbol === 'DIA' ? walls : chain?.confirmation?.symbol === etfSymbol ? confirmationWalls : { call: [], put: [] };
+  const convertedEtfWalls = [
+    ...etfWalls.put.map((contract, index) => ({ contract, side: 'put' as const, label: `P${index + 1}` })),
+    ...etfWalls.call.map((contract, index) => ({ contract, side: 'call' as const, label: `C${index + 1}` })),
+  ];
   const levelValues = [...wallConfluence.map((wall) => wall.consensusStrike), price]
     .filter((value): value is number => value !== null && value !== undefined && Number.isFinite(value));
   const levelMinimum = levelValues.length ? Math.min(...levelValues) : 0;
@@ -161,44 +177,49 @@ export default function App() {
   const scaleMinimum = Math.max(0, levelMinimum - levelSpan * 0.12);
   const scaleMaximum = levelMaximum + levelSpan * 0.12;
   const levelPosition = (value: number) => `${((value - scaleMinimum) / (scaleMaximum - scaleMinimum)) * 100}%`;
-  const cfdScale = cfdToUnderlyingFactor ?? 1;
-  const toCfdLevel = (value: number) => {
-    if (!chain?.previousDayHigh) return null;
-    return cfdScale * value;
-  };
   const instrumentChartPoints = useMemo(() => (chain?.history ?? []).map(({ time, close }) => ({ time, value: close })), [chain?.history]);
-  const instrumentChartLevels = useMemo(() => [
-    ...walls.put.map((wall, index) => ({ price: wall.strike, color: '#f18270', title: `P${index + 1}` })),
-    ...(chain?.gex?.putWall ? [{ price: chain.gex.putWall.strike, color: '#c0392b', title: 'GEX P' }] : []),
-    ...(chain?.gex?.gammaFlip ? [{ price: chain.gex.gammaFlip, color: '#b8a1e3', title: 'FLIP' }] : []),
-    ...(price !== null && price !== undefined ? [{ price, color: '#d8e2da', title: 'SPOT' }] : []),
-    ...(chain?.previousDayHigh ? [{ price: chain.previousDayHigh, color: '#f3c969', title: 'PDH' }] : []),
-    ...(chain?.previousDayClose ? [{ price: chain.previousDayClose, color: '#7aa2f7', title: 'PDC' }] : []),
-    ...walls.call.map((wall, index) => ({ price: wall.strike, color: '#55c99b', title: `C${index + 1}` })),
-    ...(chain?.gex?.callWall ? [{ price: chain.gex.callWall.strike, color: '#27ae60', title: 'GEX C' }] : []),
-  ], [walls, price, chain?.previousDayHigh, chain?.previousDayClose, chain?.gex]);
+  const instrumentChartLevels = useMemo<ChartLevel[]>(() => [
+    ...walls.put.map((wall, index) => ({ price: wall.strike, color: '#f18270', title: `P${index + 1}`, kind: 'put' as const })),
+    ...(chain?.gex?.putWall ? [{ price: chain.gex.putWall.strike, color: '#c0392b', title: 'GEX P', kind: 'gex' as const }] : []),
+    ...(chain?.gex?.gammaFlip ? [{ price: chain.gex.gammaFlip, color: '#b8a1e3', title: 'FLIP', kind: 'gex' as const }] : []),
+    ...(price !== null && price !== undefined ? [{ price, color: '#d8e2da', title: 'SPOT', kind: 'reference' as const }] : []),
+    ...(chain?.previousDayHigh ? [{ price: chain.previousDayHigh, color: '#f3c969', title: 'PDH', kind: 'reference' as const }] : []),
+    ...(chain?.previousDayClose ? [{ price: chain.previousDayClose, color: '#7aa2f7', title: 'PDC', kind: 'reference' as const }] : []),
+    ...walls.call.map((wall, index) => ({ price: wall.strike, color: '#55c99b', title: `C${index + 1}`, kind: 'call' as const })),
+    ...(chain?.gex?.callWall ? [{ price: chain.gex.callWall.strike, color: '#27ae60', title: 'GEX C', kind: 'gex' as const }] : []),
+    ...(symbol !== 'DIA' && etfFactor !== null ? convertedEtfWalls.map((wall) => ({
+      price: wall.contract.strike * etfFactor,
+      color: wall.side === 'put' ? '#dba292' : '#9ad9b7',
+      title: `${etfSymbol} ${wall.label}`,
+      kind: wall.side,
+    })) : []),
+  ], [walls, price, chain?.previousDayHigh, chain?.previousDayClose, chain?.gex, symbol, etfFactor, etfSymbol, convertedEtfWalls]);
   const confirmationChartPoints = useMemo(() => (chain?.confirmation?.history ?? []).map(({ time, close }) => ({ time, value: close })), [chain?.confirmation?.history]);
-  const confirmationChartLevels = useMemo(() => {
+  const confirmationChartLevels = useMemo<ChartLevel[]>(() => {
     const hasChain = (chain?.confirmation?.calls?.length ?? 0) + (chain?.confirmation?.puts?.length ?? 0) > 0;
-    if (hasChain) {
+    if (hasChain && symbol !== 'DIA') {
       return [
-        ...confirmationWalls.put.map((wall, index) => ({ price: wall.strike, color: '#f18270', title: `P${index + 1}` })),
-        ...(confirmationPrice !== null ? [{ price: confirmationPrice, color: '#d8e2da', title: 'SPOT' }] : []),
-        ...(chain?.confirmation?.previousDayHigh ? [{ price: chain.confirmation.previousDayHigh, color: '#f3c969', title: 'PDH' }] : []),
-        ...(chain?.confirmation?.previousClose ? [{ price: chain.confirmation.previousClose, color: '#7aa2f7', title: 'PDC' }] : []),
-        ...confirmationWalls.call.map((wall, index) => ({ price: wall.strike, color: '#55c99b', title: `C${index + 1}` })),
+        ...confirmationWalls.put.map((wall, index) => ({ price: wall.strike, color: '#f18270', title: `P${index + 1}`, kind: 'put' as const })),
+        ...(confirmationPrice !== null ? [{ price: confirmationPrice, color: '#d8e2da', title: 'SPOT', kind: 'reference' as const }] : []),
+        ...(chain?.confirmation?.previousDayHigh ? [{ price: chain.confirmation.previousDayHigh, color: '#f3c969', title: 'PDH', kind: 'reference' as const }] : []),
+        ...(chain?.confirmation?.previousClose ? [{ price: chain.confirmation.previousClose, color: '#7aa2f7', title: 'PDC', kind: 'reference' as const }] : []),
+        ...confirmationWalls.call.map((wall, index) => ({ price: wall.strike, color: '#55c99b', title: `C${index + 1}`, kind: 'call' as const })),
       ];
     }
-    const ratio = confirmationPrice && price ? confirmationPrice / price : null;
-    if (ratio === null) return [];
     return [
-      ...walls.put.map((wall, index) => ({ price: wall.strike * ratio, color: '#f18270', title: `P${index + 1}` })),
-      ...(confirmationPrice !== null ? [{ price: confirmationPrice, color: '#d8e2da', title: 'SPOT' }] : []),
-      ...(chain?.confirmation?.previousDayHigh ? [{ price: chain.confirmation.previousDayHigh, color: '#f3c969', title: 'PDH' }] : []),
-      ...(chain?.confirmation?.previousClose ? [{ price: chain.confirmation.previousClose, color: '#7aa2f7', title: 'PDC' }] : []),
-      ...walls.call.map((wall, index) => ({ price: wall.strike * ratio, color: '#55c99b', title: `C${index + 1}` })),
+      ...(hasChain ? confirmationWalls.put.map((wall, index) => ({ price: wall.strike, color: '#f18270', title: `P${index + 1}`, kind: 'put' as const })) : []),
+      ...(symbol === 'DIA' && etfFactor !== null ? convertedEtfWalls.map((wall) => ({
+        price: wall.contract.strike * etfFactor,
+        color: wall.side === 'put' ? '#f18270' : '#55c99b',
+        title: `DIA ${wall.label}`,
+        kind: wall.side,
+      })) : []),
+      ...(confirmationPrice !== null ? [{ price: confirmationPrice, color: '#d8e2da', title: 'SPOT', kind: 'reference' as const }] : []),
+      ...(chain?.confirmation?.previousDayHigh ? [{ price: chain.confirmation.previousDayHigh, color: '#f3c969', title: 'PDH', kind: 'reference' as const }] : []),
+      ...(chain?.confirmation?.previousClose ? [{ price: chain.confirmation.previousClose, color: '#7aa2f7', title: 'PDC', kind: 'reference' as const }] : []),
+      ...(hasChain ? confirmationWalls.call.map((wall, index) => ({ price: wall.strike, color: '#55c99b', title: `C${index + 1}`, kind: 'call' as const })) : []),
     ];
-  }, [confirmationWalls, confirmationPrice, chain?.confirmation?.previousDayHigh, chain?.confirmation?.previousClose, chain?.confirmation?.calls, chain?.confirmation?.puts, walls, price]);
+  }, [confirmationWalls, confirmationPrice, chain?.confirmation?.previousDayHigh, chain?.confirmation?.previousClose, chain?.confirmation?.calls, chain?.confirmation?.puts, symbol, etfFactor, convertedEtfWalls]);
 
   function selectInstrument(nextSymbol: string) {
     setSymbol(nextSymbol);
@@ -207,8 +228,39 @@ export default function App() {
     void loadChain(nextSymbol, todayExpiration());
   }
 
-  function updateCfdHigh(value: string) {
-    setCfdPreviousHighs((current) => ({ ...current, [cfdSymbol]: value }));
+  function explainWall(wall: WallConfluence) {
+    const metric = wall.side === 'put' ? putMetric : callMetric;
+    const metricName = Number.isFinite(wall.contract.openInterest) && wall.contract.openInterest > 0 ? 'OI' : 'wolumen';
+    const matched = wall.confirmation
+      ? `Dopasowany ${chain?.confirmation?.symbol}: strike ${display(wall.confirmation.strike)}, odległość od jego SPOT ${display(wall.confirmationOffsetPct)}%.`
+      : 'Brak dopasowanego strike’u instrumentu potwierdzającego.';
+    return `${wall.label}: ${wall.side === 'put' ? 'put' : 'call'} ${symbol}, strike ${display(wall.contract.strike)}, ${metricName}: ${display(metric(wall.contract), 0)}, odległość od SPOT: ${display(wall.offsetPct)}%.\n\n${matched}\nPokazany poziom: ${display(wall.consensusStrike)}, odległość konsensusu: ${display(wall.consensusOffsetPct)}%.\n\n${helpText.consensus}`;
+  }
+
+  const gexDetails = chain?.gex
+    ? `Bieżący forward użyty w obliczeniu: ${display(chain.gex.forward)} (${chain.overnightHistory.length ? `ostatnia dostępna cena ${chain.futuresSymbol}` : 'cena instrumentu bazowego'}).`
+    : 'Brak wystarczających danych do wyznaczenia GEX.';
+  function gexWallDetails(side: 'call' | 'put') {
+    const wall = side === 'call' ? chain?.gex?.callWall : chain?.gex?.putWall;
+    if (!wall) return 'Brak wyznaczonego poziomu dla tej strony.';
+    const row = chain?.gex?.topByGex.find((item) => item.side === side && item.strike === wall.strike);
+    return `Strike: ${display(wall.strike)}; szacowany GEX: ${display(wall.gex)}; OI: ${display(wall.openInterest, 0)}${row ? `; IV: ${percentage(row.impliedVolatility)}` : ''}.`;
+  }
+  const gexLegend = [
+    { title: 'GEX P', color: '#c0392b', help: `${helpText.gexPut}\n\n${gexWallDetails('put')}\n${gexDetails}\n\n${helpText.gex}` },
+    { title: 'FLIP', color: '#b8a1e3', help: `${helpText.flip}\n\nPoziom: ${display(chain?.gex?.gammaFlip)}.\n${gexDetails}\n\n${helpText.gex}` },
+    { title: 'GEX C', color: '#27ae60', help: `${helpText.gexCall}\n\n${gexWallDetails('call')}\n${gexDetails}\n\n${helpText.gex}` },
+  ];
+  function explainEtfWall(wall: (typeof convertedEtfWalls)[number]) {
+    const converted = etfFactor === null ? null : wall.contract.strike * etfFactor;
+    return `${etfSymbol} ${wall.label}: strike ${display(wall.contract.strike)} × (${cashSymbol} high ${display(cashHigh)} ÷ ${etfSymbol} high ${display(etfHigh)}) = ${display(converted)}. Wyświetlone liczby są zaokrąglone; obliczenie korzysta z pełnej precyzji.\n\n${helpText.conversion}`;
+  }
+  function explainChartLevel(level: ChartLevel) {
+    if (level.kind === 'gex') {
+      return `\n${gexDetails}${level.title === 'GEX C' ? `\n${gexWallDetails('call')}` : level.title === 'GEX P' ? `\n${gexWallDetails('put')}` : ''}`;
+    }
+    const etfWall = convertedEtfWalls.find((wall) => `${etfSymbol} ${wall.label}` === level.title);
+    return etfWall ? `\n\n${explainEtfWall(etfWall)}` : '';
   }
 
   return (
@@ -241,6 +293,7 @@ export default function App() {
               <span>O <strong>{headerTodayOpen == null ? '—' : `${currencySymbol}${display(headerTodayOpen)}`}</strong></span>
               <span>H <strong>{headerTodayHigh == null ? '—' : `${currencySymbol}${display(headerTodayHigh)}`}</strong></span>
               <span>L <strong>{headerTodayLow == null ? '—' : `${currencySymbol}${display(headerTodayLow)}`}</strong></span>
+              <HelpTip label="Otwarcie, maksimum i minimum sesji" text={helpText.session} />
             </div>
           )}
           {!headerQuoteSymbol && chain?.confirmation && chain.confirmationTodayOpen !== null && chain.confirmationTodayOpen !== undefined && (
@@ -264,6 +317,7 @@ export default function App() {
         <div className="select-wrap">
           <span className="control-label">EXPIRATION</span>
           <strong className="today-expiry">{chain?.isNearestExpiration ? 'NEAREST' : '0DTE'} · {expirationLabel(Number(expiration))}</strong>
+          <HelpTip label="0DTE i termin wygaśnięcia" text={helpText.expiration} />
         </div>
         <div className="toolbar-meta">
           <span>AUTO · 5 MIN</span>
@@ -273,21 +327,13 @@ export default function App() {
         </div>
       </section>
 
-      <section className="cfd-entry-panel" aria-label={`${cfdSymbol} previous-day high input`}>
-        <div className="cfd-entry-title">
-          <span className="control-label">CFD ANCHOR · PREVIOUS SESSION HIGH</span>
-          <span className="expiry-badge">{cfdSymbol}</span>
-        </div>
-        <label className="cfd-anchor-input">
-          <span className="metric-label">YOUR {cfdSymbol} · PREVIOUS HIGH</span>
-          <div className="number-input-wrap"><span>{cfdSymbol}</span><input aria-label={`${cfdSymbol} CFD previous-day high`} type="number" min="0" step="0.1" inputMode="decimal" placeholder="Enter yesterday high" value={cfdPreviousHigh} onChange={(event) => updateCfdHigh(event.target.value)} /></div>
-        </label>
-        <div className="cfd-entry-reference">
-          <span>{symbol} PDH <strong>{chain?.previousDayHigh ? display(chain.previousDayHigh) : '—'}</strong></span>
-          <span>{chain?.referenceSymbol ?? activeInstrument?.label ?? symbol} PDH <strong>{chain?.referencePreviousDayHigh ? display(chain.referencePreviousDayHigh) : '—'}</strong></span>
-        </div>
-      </section>
-
+      <div className="chart-controls" role="group" aria-label="Chart display">
+        <span className="control-label">CHART LEVELS · {showAllWalls ? 'ALL WALLS' : '2 NEAREST PER SIDE'}</span>
+        <HelpTip label="Poziomy i grupowanie na wykresach" text={helpText.chart} />
+        <button type="button" className="chart-toggle" aria-pressed={showAllWalls} onClick={() => setShowAllWalls((current) => !current)}>ALL WALLS</button>
+        <button type="button" className="chart-toggle" aria-pressed={showGex} onClick={() => setShowGex((current) => !current)}>GEX + FLIP</button>
+        <HelpTip label="GEX i FLIP" text={`${helpText.gex}\n\n${helpText.flip}\n\n${gexDetails}`} />
+      </div>
       <div className="chart-pair">
         {chain?.confirmation && chain.confirmation.symbol === chain.referenceSymbol && confirmationChartPoints.length > 0 && <PriceChart
           title={instruments.find((instrument) => instrument.symbol === chain.confirmation?.symbol)?.label ?? chain.confirmation.symbol}
@@ -295,8 +341,12 @@ export default function App() {
           subtitle="PEER · SAME-DAY OPTIONS + SPOT"
           points={confirmationChartPoints}
           levels={confirmationChartLevels}
+          spot={confirmationPrice}
+          showAllWalls={showAllWalls}
+          showGex={showGex}
+          levelDetails={explainChartLevel}
           lineColor="#72bda5"
-          legend={[{ title: 'PUT WALLS', color: '#f18270' }, { title: 'SPOT', color: '#d8e2da' }, { title: 'PDH', color: '#f3c969' }, { title: 'PDC', color: '#7aa2f7' }, { title: 'CALL WALLS', color: '#55c99b' }]}
+          legend={chartLegend}
         />}
         <PriceChart
           title={activeInstrument?.label ?? symbol}
@@ -304,8 +354,12 @@ export default function App() {
           subtitle="TODAY · PRE/POST-MARKET · WALLS + PDH"
           points={instrumentChartPoints}
           levels={instrumentChartLevels}
+          spot={price ?? null}
+          showAllWalls={showAllWalls}
+          showGex={showGex}
+          levelDetails={explainChartLevel}
           lineColor="#55c99b"
-          legend={[{ title: 'PUT WALLS', color: '#f18270' }, { title: 'SPOT', color: '#d8e2da' }, { title: 'PDH', color: '#f3c969' }, { title: 'PDC', color: '#7aa2f7' }, { title: 'CALL WALLS', color: '#55c99b' }]}
+          legend={showGex ? [...chartLegend, ...gexLegend] : chartLegend}
         />
         {chain?.confirmation && chain.confirmation.symbol !== chain.referenceSymbol && confirmationChartPoints.length > 0 && <PriceChart
           title={instruments.find((instrument) => instrument.symbol === chain.confirmation?.symbol)?.label ?? chain.confirmation.symbol}
@@ -313,36 +367,41 @@ export default function App() {
           subtitle={chain.confirmation.calls.length ? 'PEER · SAME-DAY OPTIONS + SPOT' : 'CASH INDEX · REFERENCE'}
           points={confirmationChartPoints}
           levels={confirmationChartLevels}
+          spot={confirmationPrice}
+          showAllWalls={showAllWalls}
+          showGex={showGex}
+          levelDetails={explainChartLevel}
           lineColor="#72bda5"
-          legend={[{ title: 'PUT WALLS', color: '#f18270' }, { title: 'SPOT', color: '#d8e2da' }, { title: 'PDH', color: '#f3c969' }, { title: 'PDC', color: '#7aa2f7' }, { title: 'CALL WALLS', color: '#55c99b' }]}
+          legend={chartLegend}
         />}
       </div>
 
       <section className="levels-panel standalone-levels" aria-label="Option wall price levels">
         <div className="levels-heading">
           <div>
-            <h2>Key levels</h2>
+            <h2>Key levels <HelpTip label="Key levels i konsensus" text={`${helpText.walls}\n\n${helpText.consensus}`} /></h2>
             <span className="chain-caption">±{display(wallTolerance * 100, 0)}% SPOT · PEER OFFSET ≤0.25 P.P.</span>
+            <HelpTip label="Confluence i potwierdzenie" text={helpText.confluence} />
             {chain?.confirmationWarning && <p className="options-warning">{chain.confirmationWarning}</p>}
           </div>
           <span className="levels-symbol">{chain?.symbol ?? symbol} · {expiration ? expirationLabel(Number(expiration)) : '—'}</span>
         </div>
         <div className="levels-rows">
           {wallConfluence.filter((wall) => wall.side === 'put').map((wall) => <div className="level-row put-level" key={`put-${wall.contract.strike}`}>
-            <span className="level-name">{wall.label}</span>
+            <span className="level-name">{wall.label}<HelpTip label={`${wall.label}: szczegóły poziomu`} text={explainWall(wall)} /></span>
             <div className="level-track"><span className="level-marker" style={{ left: levelPosition(wall.consensusStrike) }} /></div>
             <strong className="level-price">{currencySymbol}{display(wall.consensusStrike)}</strong>
             <span className="level-distance">{display(wall.consensusOffsetPct)}%</span>
             <span className={`confluence-tag ${wall.confirmation ? 'confirmed' : 'single-source'}`}>{wall.confirmation ? `CONF ${chain?.confirmation?.symbol}` : chain?.confirmationSymbol ? 'UNCONFIRMED' : 'SINGLE'}</span>
           </div>)}
           <div className="level-row spot-level">
-            <span className="level-name">SPOT</span>
+            <span className="level-name">SPOT<HelpTip label="SPOT instrumentu bazowego" text={helpText.spot} /></span>
             <div className="level-track"><span className="level-marker" style={price !== null && price !== undefined ? { left: levelPosition(price) } : undefined} /></div>
             <strong className="level-price">{price === null || price === undefined ? '—' : `${currencySymbol}${display(price)}`}</strong>
             <span className="level-distance">UNDERLYING</span>
           </div>
           {wallConfluence.filter((wall) => wall.side === 'call').map((wall) => <div className="level-row call-level" key={`call-${wall.contract.strike}`}>
-            <span className="level-name">{wall.label}</span>
+            <span className="level-name">{wall.label}<HelpTip label={`${wall.label}: szczegóły poziomu`} text={explainWall(wall)} /></span>
             <div className="level-track"><span className="level-marker" style={{ left: levelPosition(wall.consensusStrike) }} /></div>
             <strong className="level-price">{currencySymbol}{display(wall.consensusStrike)}</strong>
             <span className="level-distance">{display(wall.consensusOffsetPct)}%</span>
@@ -351,50 +410,46 @@ export default function App() {
         </div>
       </section>
 
-      <section className="cfd-panel" aria-label={`${cfdSymbol} CFD wall conversion`}>
+      {etfSymbol && <section className="cfd-panel" aria-label={`${etfSymbol} cash index wall conversion`}>
         <div className="cfd-heading">
-          <div><h2>{cfdSymbol} CFD conversion</h2><span className="chain-caption">PREVIOUS-HIGH ALIGNMENT · CFD → FUTURES → OPTIONS</span></div>
-          <span className="expiry-badge">{activeInstrument?.label ?? symbol} · {chain?.isNearestExpiration ? 'NEAREST' : '0DTE'}</span>
+          <div><h2>{etfSymbol} walls in {cashSymbol} units <HelpTip label={`Przeliczenie ${etfSymbol} na ${cashSymbol}`} text={`${helpText.conversion}\n\n${etfSymbol} high: ${display(etfHigh)} (${etfDate ?? 'brak daty'}); ${cashSymbol} high: ${display(cashHigh)} (${cashDate ?? 'brak daty'}); współczynnik: ${display(etfFactor, 5)}.`} /></h2><span className="chain-caption">PREVIOUS SESSION HIGH · CASH INDEX LEVELS APPROXIMATE {cfdSymbol} CFD, NOT BROKER PRICES</span></div>
+          <span className="expiry-badge">{etfSymbol} · {chain?.isNearestExpiration ? 'NEAREST' : '0DTE'}</span>
         </div>
         <div className="cfd-inputs">
           <div className="reference-high">
-            <span className="metric-label">{activeInstrument?.label ?? symbol} · OPTION PDH</span>
-            <strong>{chain?.previousDayHigh ? `${currencySymbol}${display(chain.previousDayHigh)}` : '—'}</strong>
-            <span>{chain?.previousDayDate ?? 'Waiting for daily data'}</span>
+            <span className="metric-label">{etfSymbol} · PREVIOUS HIGH</span>
+            <strong>{display(etfHigh)}</strong>
+            <span>{etfDate ?? 'Waiting for daily data'}</span>
           </div>
-          {<div className="reference-high qqq-reference-high">
-            <span className="metric-label">{chain?.referenceSymbol ?? activeInstrument?.label ?? symbol} · REFERENCE PDH</span>
-            <strong>{chain?.referencePreviousDayHigh ? `${currencySymbol}${display(chain.referencePreviousDayHigh)}` : '—'}</strong>
-            <span>{chain?.referencePreviousDayDate ?? 'Waiting for daily data'}</span>
-          </div>}
+          <div className="reference-high">
+            <span className="metric-label">{cashSymbol} · PREVIOUS HIGH</span>
+            <strong>{display(cashHigh)}</strong>
+            <span>{cashDate ?? 'Waiting for daily data'}</span>
+          </div>
           <div className="conversion-steps">
-            <span>{cfdSymbol} / {symbol}: <b>{cfdToUnderlyingFactor === null ? '—' : display(cfdToUnderlyingFactor, 5)}</b></span>
-            <span>COMBINED: <b>{conversionFactor === null ? '—' : display(conversionFactor, 5)}</b></span>
+            <span>{cashSymbol} / {etfSymbol}: <b>{display(etfFactor, 5)}</b></span>
           </div>
-          <p className="conversion-formula">CFD wall = option strike × ({cfdSymbol} PDH ÷ {symbol} PDH)</p>
+          <p className="conversion-formula">Cash index level = {etfSymbol} strike × ({cashSymbol} previous high ÷ {etfSymbol} previous high). Highs must be from the same session.</p>
         </div>
         <div className="conversion-table-wrap">
           <table className="conversion-table">
-            <thead><tr><th>LEVEL</th><th>PRIMARY / PEER STRIKE</th><th>CONSENSUS OFFSET</th><th>{cfdSymbol} CFD LEVEL</th></tr></thead>
+            <thead><tr><th>LEVEL</th><th>{etfSymbol} STRIKE</th><th>{cashSymbol} CASH LEVEL · {cfdSymbol} APPROX.</th></tr></thead>
             <tbody>
-              {cfdLevels.length ? cfdLevels.map((wall) => {
-                const convertedLevel = toCfdLevel(wall.consensusStrike);
-                return <tr key={wall.label}>
-                  <td className={wall.side === 'put' ? 'put-conversion' : 'call-conversion'}>{wall.label} <span className={`confluence-tag ${wall.confirmation ? 'confirmed' : 'single-source'}`}>{wall.confirmation ? `CONF ${chain?.confirmation?.symbol}` : chain?.confirmationSymbol ? 'UNCONFIRMED' : 'SINGLE'}</span></td>
-                  <td>{display(wall.contract.strike)}{wall.confirmation ? ` / ${display(wall.confirmation.strike)}` : ''}</td>
-                  <td>{display(wall.consensusOffsetPct)}%</td>
-                  <td className="converted-level">{convertedLevel === null ? `Enter ${cfdSymbol} high` : display(convertedLevel)}</td>
-                </tr>;
-              }) : <tr><td className="conversion-empty" colSpan={4}>{optionsUnavailableMessage || error || 'No 0DTE wall levels for this instrument today.'}</td></tr>}
+              {convertedEtfWalls.length ? convertedEtfWalls.map((wall) => <tr key={wall.label}>
+                <td className={wall.side === 'put' ? 'put-conversion' : 'call-conversion'}>{wall.label}<HelpTip label={`${etfSymbol} ${wall.label}: przeliczenie`} text={explainEtfWall(wall)} /></td>
+                <td>{display(wall.contract.strike)}</td>
+                <td className="converted-level">{etfFactor === null ? '—' : display(wall.contract.strike * etfFactor)}</td>
+              </tr>) : <tr><td className="conversion-empty" colSpan={3}>{loading ? 'Loading ETF walls.' : error || (symbol !== 'DIA' ? chain?.confirmationWarning : null) || optionsUnavailableMessage || `No ${etfSymbol} walls available.`}</td></tr>}
             </tbody>
           </table>
+          {!loading && !error && etfFactor === null && <p className="options-warning conversion-notice">Conversion unavailable: both previous highs must be positive and from the same session.</p>}
         </div>
-      </section>
+      </section>}
 
       <section className="chain-panel" aria-label="Options chain">
         <div className="chain-heading">
           <div>
-            <h2>Wall strikes</h2>
+            <h2>Wall strikes <HelpTip label="Wybór walli" text={`${helpText.walls}\n\nBieżące ustawienia: pasmo ±${display(wallTolerance * 100, 0)}%, próg ${Math.round(wallLeaderThreshold * 100)}% lidera, maksimum ${maxWalls} walli na stronę${wallMinMetric > 0 ? `, minimum metryki ${wallMinMetric}` : ''}. Jeśli jest za mało wyników spełniających próg, aplikacja uzupełnia listę najsilniejszymi pozostałymi kandydatami według metryki.`} /></h2>
             <span className="chain-caption">{showNearestStrikes ? 'NEAREST AVAILABLE STRIKES · WALL LEVELS NEED OPEN INTEREST' : `KEY CALLS + PUTS · WITHIN ±${display(wallTolerance * 100, 0)}% SPOT · ≥${Math.round(wallLeaderThreshold * 100)}% TOP OI${wallsByVolume ? ' · BY VOLUME' : ''}`}</span>
             {chain?.optionsWarning && <p className="options-warning">{chain.optionsWarning}</p>}
             {wallsByVolume && !showNearestStrikes && <p className="options-warning">Open interest unavailable; walls ranked by volume.</p>}
@@ -406,13 +461,13 @@ export default function App() {
           <table>
             <thead>
               <tr className="group-head">
-                <th className="call-group" colSpan={5}>CALLS</th>
-                <th className="strike-heading" rowSpan={2}>STRIKE</th>
-                <th className="put-group" colSpan={5}>PUTS</th>
+                <th className="call-group" colSpan={5}>CALLS <HelpTip label="Opcje call" text={helpText.calls} /></th>
+                <th className="strike-heading" rowSpan={2}>STRIKE <HelpTip label="Strike" text={helpText.strike} /></th>
+                <th className="put-group" colSpan={5}>PUTS <HelpTip label="Opcje put" text={helpText.puts} /></th>
               </tr>
               <tr className="column-head">
-                <th>OPEN INT.</th><th>VOLUME</th><th>IV</th><th>BID</th><th>ASK</th>
-                <th>BID</th><th>ASK</th><th>IV</th><th>VOLUME</th><th>OPEN INT.</th>
+                <th>OPEN INT.<HelpTip label="Call open interest" text={helpText.oi} /></th><th>VOLUME<HelpTip label="Call wolumen" text={helpText.volume} /></th><th>IV<HelpTip label="Call IV" text={helpText.iv} /></th><th>BID<HelpTip label="Call bid" text={helpText.bid} /></th><th>ASK<HelpTip label="Call ask" text={helpText.ask} /></th>
+                <th>BID<HelpTip label="Put bid" text={helpText.bid} /></th><th>ASK<HelpTip label="Put ask" text={helpText.ask} /></th><th>IV<HelpTip label="Put IV" text={helpText.iv} /></th><th>VOLUME<HelpTip label="Put wolumen" text={helpText.volume} /></th><th>OPEN INT.<HelpTip label="Put open interest" text={helpText.oi} /></th>
               </tr>
             </thead>
             <tbody>
@@ -446,7 +501,7 @@ export default function App() {
             </tbody>
           </table>
         </div>
-        <footer className="panel-footer"><span>DATA: {activeInstrument?.dataSource ?? 'YAHOO FINANCE'}</span><span>{updatedAt ? `UPDATED ${updatedAt}` : 'AWAITING MARKET DATA'} · DELAYED DATA MAY APPLY</span></footer>
+        <footer className="panel-footer"><span>DATA: {activeInstrument?.dataSource ?? 'YAHOO FINANCE'} <HelpTip label="Źródła i opóźnienie danych" text={helpText.source} /></span><span>{updatedAt ? `UPDATED ${updatedAt}` : 'AWAITING MARKET DATA'} · DELAYED DATA MAY APPLY</span></footer>
       </section>
       <footer className="page-footer"><span>Market Desk</span><span>For informational purposes only. Not investment advice.</span></footer>
     </main>

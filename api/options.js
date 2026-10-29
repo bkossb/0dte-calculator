@@ -351,14 +351,6 @@ async function handleEurexChain(request, response, symbol, market, range) {
     const futuresPrevious = futuresBars?.length
       ? previousSessionFromBars(futuresBars, EUREX_TIME_ZONE)
       : null;
-    const isTodayBerlin = (time) => zonedDate(time, EUREX_TIME_ZONE) === `${todayCompact.slice(0, 4)}-${todayCompact.slice(4, 6)}-${todayCompact.slice(6, 8)}`;
-    const indexOpenBar = (chartResult?.timestamp ?? [])
-      .map((time, index) => ({ time, open: chartResult?.indicators?.quote?.[0]?.open?.[index] }))
-      .find((bar) => isTodayBerlin(bar.time) && Number.isFinite(bar.open));
-    const futuresOpenBar = (futuresBars ?? []).find((bar) => isTodayBerlin(bar.time) && Number.isFinite(bar.open));
-    const sessionOpenRatio = indexOpenBar && futuresOpenBar && futuresOpenBar.open > 0 && indexOpenBar.open > 0
-      ? futuresOpenBar.open / indexOpenBar.open
-      : null;
     const futuresPreviousDayHigh = futuresPrevious?.high ?? selectedPreviousSession?.high ?? null;
     const futuresPreviousDayClose = futuresPrevious?.close ?? selectedPreviousSession?.close ?? null;
     const futuresPreviousDayDate = futuresPrevious?.date ?? selectedPreviousSession?.date ?? null;
@@ -407,7 +399,6 @@ async function handleEurexChain(request, response, symbol, market, range) {
       futuresPreviousDayHigh: futuresPreviousDayHigh,
       futuresPreviousDayClose: futuresPreviousDayClose,
       futuresPreviousDayDate: futuresPreviousDayDate,
-      sessionOpenRatio,
       gex,
       overnightHistory,
       overnightError: overnightHistory.length ? null : 'FDAX futures history is unavailable.',
@@ -567,6 +558,7 @@ export default async function handler(request, response) {
           changePercent: peerChangePercent,
           previousClose: peerPreviousClose,
           previousDayHigh: confirmationPreviousSession?.high ?? null,
+          previousDayDate: confirmationPreviousSession?.date ?? null,
           calls: confirmationOptions?.calls ?? [],
           puts: confirmationOptions?.puts ?? [],
           history: peerHistory,
@@ -640,7 +632,6 @@ export default async function handler(request, response) {
       futuresPreviousDayDate: futuresPreviousSession?.date ?? null,
       overnightHistory,
       overnightError: overnightHistory.length ? null : overnightResult?.meta?.symbol ? 'No overnight futures history.' : 'Nasdaq futures history is unavailable.',
-      sessionOpenRatio: null,
       gex,
       fetchedAt: new Date().toISOString(),
     });

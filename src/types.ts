@@ -14,8 +14,8 @@ export type Contract = {
 
 export type HistoryPoint = { time: number; close: number };
 export type ChartPoint = { time: number; value: number };
-export type ChartLevel = { price: number; color: string; title: string };
-export type ConfirmationChain = { symbol: string; price: number | null; changePercent: number | null; previousClose: number | null; previousDayHigh: number | null; calls: Contract[]; puts: Contract[]; history: HistoryPoint[] };
+export type ChartLevel = { price: number; color: string; title: string; kind: 'put' | 'call' | 'gex' | 'reference' };
+export type ConfirmationChain = { symbol: string; price: number | null; changePercent: number | null; previousClose: number | null; previousDayHigh: number | null; previousDayDate: string | null; calls: Contract[]; puts: Contract[]; history: HistoryPoint[] };
 export type WallConfluence = {
   contract: Contract;
   side: 'put' | 'call';
@@ -61,7 +61,6 @@ export type Chain = {
   futuresPreviousDayHigh: number | null;
   futuresPreviousDayClose: number | null;
   futuresPreviousDayDate: string | null;
-  sessionOpenRatio: number | null;
   gex: {
     forward: number;
     timeYears: number;
