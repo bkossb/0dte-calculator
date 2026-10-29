@@ -9,6 +9,7 @@ export type AnalysisWall = {
   contract: Contract;
   confirmation: string | null;
   conversion: { symbol: string; factor: number | null } | null;
+  specialMatches: { symbol: string; label: string; price: number; approximate: boolean; differencePct: number }[];
 };
 
 export type AnalysisGroup = {
@@ -24,6 +25,7 @@ type Props = {
   expiration: string | null;
   updated: string | null;
   source: string;
+  specialStatus: string | null;
   loading: boolean;
   error: string;
 };
@@ -35,7 +37,7 @@ const positionLabels = {
   unknown: 'odległość od SPOT niedostępna',
 };
 
-export function WallAnalysis({ groups, expiration, updated, source, loading, error }: Props) {
+export function WallAnalysis({ groups, expiration, updated, source, specialStatus, loading, error }: Props) {
   return <section className="analysis-panel" aria-label="Scenariusze dla poziomów opcyjnych">
     <div className="analysis-heading">
       <div>
@@ -50,6 +52,7 @@ export function WallAnalysis({ groups, expiration, updated, source, loading, err
       </div>
     </div>
     {error && <p className="analysis-warning" role="alert">Błąd pobierania: {error}{groups.length > 0 ? ' Poniżej ostatnie dostępne dane.' : ''}</p>}
+    {specialStatus && <p className="analysis-special-status">{specialStatus} <HelpTip label="Poziom specjalny" text="Poziom specjalny powstaje, gdy wybrany wall indeksu i wybrany wall ETF tej samej strony (put–put lub call–call) po przeliczeniu różnią się o nie więcej niż 0,1% strike’u indeksu. Porównywane są wszystkie takie pary, bez zaokrąglania. Przeliczenie ETF wykorzystuje maksima poprzedniej sesji i jest przybliżeniem, nie ceną CFD brokera. To inne kryterium niż confluence liczone względem cen SPOT i nie jest prognozą reakcji rynku." /></p>}
     {loading && <p className="analysis-empty">Pobieranie danych do analizy...</p>}
     {!loading && groups.length === 0 && !error && <p className="analysis-empty">Brak danych do analizy walli.</p>}
     {!loading && groups.map((group) => <div className="analysis-group" key={group.symbol}>
@@ -64,11 +67,17 @@ export function WallAnalysis({ groups, expiration, updated, source, loading, err
           const hasOi = Number.isFinite(wall.contract.openInterest) && wall.contract.openInterest > 0;
           const metric = hasOi ? wall.contract.openInterest : wall.contract.volume;
           const metricAvailable = Number.isFinite(metric) && metric > 0;
-          return <article className={`analysis-card analysis-${wall.side}`} key={`${wall.side}-${wall.label}-${wall.contract.strike}`}>
+          return <article className={`analysis-card analysis-${wall.side}${wall.specialMatches.length ? ' analysis-special' : ''}`} key={`${wall.side}-${wall.label}-${wall.contract.strike}`}>
             <div className="analysis-card-heading">
               <span className={`analysis-side ${wall.side}-color`}>{wall.label} · {wall.side.toUpperCase()} WALL</span>
               <strong>{cashPrice !== null && wall.conversion ? '≈ ' : ''}{display(cashPrice)} {group.priceSymbol}</strong>
             </div>
+            {wall.specialMatches.length > 0 && <div className="analysis-special-details">
+              <span className="analysis-special-badge">POZIOM SPECJALNY</span>
+              {wall.specialMatches.map((match) => <p key={`${match.symbol}-${match.label}`}>
+                {match.symbol} {match.label}: {match.approximate ? '≈ ' : ''}{display(match.price)} {group.priceSymbol} · różnica {display(match.differencePct, 3)}%
+              </p>)}
+            </div>}
             <p className="analysis-distance">
               {offsetPct === null ? positionLabels[position] : `${offsetPct > 0 ? '+' : ''}${display(offsetPct)}% · ${positionLabels[position]}`}
             </p>

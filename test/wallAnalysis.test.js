@@ -1,6 +1,34 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { wallCashPrice, wallPosition } from '../src/lib/wallAnalysis.ts';
+import { specialWallMatches, wallCashPrice, wallPosition } from '../src/lib/wallAnalysis.ts';
+
+const wall = (label, side, strike) => ({ label, side, contract: { strike } });
+
+test('special levels include the exact 0.1% boundary on both sides of the index strike', () => {
+  const index = [wall('P1', 'put', 10000)];
+  const etf = [wall('P1', 'put', 100.1), wall('P2', 'put', 99.9), wall('P3', 'put', 100.1001)];
+  const matches = specialWallMatches(index, etf, 100);
+  assert.deepEqual(matches.map((match) => match.etfLabel), ['P1', 'P2']);
+  assert.ok(matches.every((match) => Math.abs(match.differencePct - 0.1) < 1e-10));
+  assert.equal(specialWallMatches([wall('P1', 'put', 0.3)], [wall('P1', 'put', 0.3003)], 1).length, 1);
+  assert.equal(specialWallMatches([wall('P1', 'put', 0.3)], [wall('P1', 'put', 0.300300001)], 1).length, 0);
+});
+
+test('special levels compare all qualifying pairs only on the same side', () => {
+  const index = [wall('P1', 'put', 10000), wall('P2', 'put', 10005), wall('C1', 'call', 10000)];
+  const etf = [wall('P1', 'put', 100), wall('C1', 'call', 100)];
+  assert.deepEqual(specialWallMatches(index, etf, 100).map(({ cashLabel, etfLabel }) => [cashLabel, etfLabel]),
+    [['P1', 'P1'], ['P2', 'P1'], ['C1', 'C1']]);
+});
+
+test('special levels require valid prices, conversion, and both sets of walls', () => {
+  const index = [wall('P1', 'put', 10000), wall('P2', 'put', 0)];
+  const etf = [wall('P1', 'put', 100), wall('P2', 'put', Infinity)];
+  for (const factor of [null, 0, -1, Infinity, NaN]) assert.deepEqual(specialWallMatches(index, etf, factor), []);
+  assert.deepEqual(specialWallMatches(index, [], 100), []);
+  assert.deepEqual(specialWallMatches([], etf, 100), []);
+  assert.equal(specialWallMatches(index, etf, 100).length, 1);
+});
 
 test('uses cash strikes directly and converts ETF strikes using the supplied factor', () => {
   assert.equal(wallCashPrice(30000, null), 30000);

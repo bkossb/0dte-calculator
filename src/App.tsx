@@ -4,7 +4,7 @@ import type { Chain, ChartLevel, WallConfluence } from './types';
 import { CONFLUENCE_TOLERANCE_PCT, instruments } from './config/instruments';
 import { compact, display, expirationLabel, heat, numberFormat, percentage, todayExpiration } from './lib/format';
 import { etfToCashFactor } from './lib/etfConversion';
-import { wallCashPrice } from './lib/wallAnalysis';
+import { specialWallMatches, wallCashPrice } from './lib/wallAnalysis';
 import { helpText } from './lib/helpText';
 import { BROWSER_TIME_ZONE, isValidTimeZone, readTimeZonePreference, TIME_ZONE_STORAGE_KEY, timeZoneOptions } from './lib/timeZone';
 import { selectWallContracts, wallMetric } from './lib/walls';
@@ -195,6 +195,16 @@ export default function App() {
       ...etfWalls.call.map((contract, index) => ({ contract, side: 'call' as const, label: `C${index + 1}` })),
     ];
   }, [symbol, walls, chain?.confirmation?.symbol, etfSymbol, confirmationWalls]);
+  const specialMatches = etfSymbol && symbol !== 'DIA'
+    ? specialWallMatches(primaryWalls, convertedEtfWalls, etfFactor)
+    : [];
+  const specialStatus = !chain ? null
+    : symbol === 'DIA' ? 'Poziomy specjalne niedostępne: brak łańcucha opcji DJI do porównania z DIA.'
+    : symbol === 'GLD' ? 'Poziomy specjalne niedostępne: brak przeliczenia GLD i opcyjnego poziomu XAUUSD.'
+    : !etfSymbol ? 'Poziomy specjalne niedostępne: brak porównywanego ETF.'
+    : etfFactor === null ? 'Poziomy specjalne niedostępne: brak poprawnego przeliczenia ETF na indeks.'
+    : primaryWalls.length === 0 || convertedEtfWalls.length === 0 ? 'Poziomy specjalne niedostępne: brak wybranych walli indeksu lub ETF do porównania.'
+    : `Poziom specjalny: put–put lub call–call w odległości do 0,1%. Pasujące pary: ${specialMatches.length}.`;
   const analysisGroups: AnalysisGroup[] = chain ? [
     {
       symbol: activeInstrument?.label ?? symbol,
@@ -208,11 +218,11 @@ export default function App() {
           : null;
         const confirmation = wall.confirmation
           ? peerCashPrice === null
-            ? `Dopasowanie ${chain.confirmation?.symbol}; brak przeliczenia jego poziomu.`
-            : `Dopasowanie ${chain.confirmation?.symbol}: ≈ ${display(peerCashPrice)} ${activeInstrument?.label ?? symbol}.`
+            ? `Confluence ${chain.confirmation?.symbol}; brak przeliczenia jego poziomu.`
+            : `Confluence ${chain.confirmation?.symbol}: ≈ ${display(peerCashPrice)} ${activeInstrument?.label ?? symbol}.`
           : chain.confirmationSymbol
             ? confirmationPrice !== null && confirmationPrice > 0 && peerContracts?.length
-              ? `Brak dopasowania ${chain.confirmationSymbol}.`
+              ? `Brak confluence ${chain.confirmationSymbol}.`
               : `Brak danych opcyjnych lub SPOT ${chain.confirmationSymbol} do porównania.`
             : null;
         return {
@@ -223,6 +233,8 @@ export default function App() {
           conversion: symbol === 'DIA'
             ? { symbol: 'DJI', factor: etfFactor }
             : symbol === 'GLD' ? { symbol: 'XAUUSD', factor: null } : null,
+          specialMatches: etfSymbol ? specialMatches.filter((match) => match.side === wall.side && match.cashLabel === wall.label)
+            .map((match) => ({ symbol: etfSymbol, label: match.etfLabel, price: match.etfPrice, approximate: true, differencePct: match.differencePct })) : [],
         };
       }),
     },
@@ -236,8 +248,10 @@ export default function App() {
           primary.side === wall.side && primary.confirmation?.contractSymbol === wall.contract.contractSymbol);
         return {
           ...wall,
-          confirmation: match ? `Dopasowanie ${activeInstrument?.label ?? symbol}: ${display(match.contract.strike)}.` : `Brak dopasowania do wybranego walla ${activeInstrument?.label ?? symbol}.`,
+          confirmation: match ? `Confluence ${activeInstrument?.label ?? symbol}: ${display(match.contract.strike)}.` : `Brak confluence z wybranym wallem ${activeInstrument?.label ?? symbol}.`,
           conversion: { symbol: activeInstrument?.label ?? symbol, factor: etfFactor },
+          specialMatches: specialMatches.filter((item) => item.side === wall.side && item.etfLabel === wall.label)
+            .map((item) => ({ symbol: activeInstrument?.label ?? symbol, label: item.cashLabel, price: item.cashPrice, approximate: false, differencePct: item.differencePct })),
         };
       }),
     }] : []),
@@ -419,6 +433,7 @@ export default function App() {
         expiration={chain?.selectedExpiration ? `${chain.isNearestExpiration ? 'NEAREST' : '0DTE'} · ${expirationLabel(chain.selectedExpiration)}` : null}
         updated={updatedAt === null ? null : new Intl.DateTimeFormat('en-GB', { timeZone, dateStyle: 'medium', timeStyle: 'short' }).format(updatedAt)}
         source={symbol === '^GDAXI' ? 'EUREX (OPCJE EOD) · YAHOO FINANCE' : activeInstrument?.dataSource ?? 'YAHOO FINANCE'}
+        specialStatus={specialStatus}
         loading={loading}
         error={error}
       />
