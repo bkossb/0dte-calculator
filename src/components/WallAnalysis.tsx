@@ -1,6 +1,6 @@
 import type { Contract } from '../types';
 import { display } from '../lib/format';
-import { wallPosition } from '../lib/wallAnalysis';
+import { wallCashPrice, wallPosition } from '../lib/wallAnalysis';
 import { HelpTip } from './HelpTip';
 
 export type AnalysisWall = {
@@ -13,6 +13,7 @@ export type AnalysisWall = {
 
 export type AnalysisGroup = {
   symbol: string;
+  priceSymbol: string;
   spot: number | null;
   walls: AnalysisWall[];
   emptyMessage: string;
@@ -39,7 +40,7 @@ export function WallAnalysis({ groups, expiration, updated, source, loading, err
     <div className="analysis-heading">
       <div>
         <div className="analysis-eyebrow">MARKET CONTEXT</div>
-        <h2>Scenariusze dla walli <HelpTip label="Interpretacja walli" text="Scenariusze opisują możliwe reakcje względem strike’u, a nie prognozę lub prawdopodobieństwo. OI i wolumen nie ujawniają pozycji dealerów ani tego, czy poziom zostanie obroniony. Potwierdzenie oznacza wyłącznie dopasowanie odległości strike’ów, nie potwierdzenie kierunku ceny." /></h2>
+        <h2>Scenariusze dla walli <HelpTip label="Interpretacja walli" text="Scenariusze opisują możliwe reakcje względem poziomu w skali kasowej, a nie prognozę lub prawdopodobieństwo. Poziomy ETF są przybliżeniem na podstawie maksimów poprzedniej sesji, nie ceną CFD brokera. Odległość i scenariusze odnoszą się do ostatniego dostępnego SPOT indeksu kasowego. OI i wolumen nie ujawniają pozycji dealerów. Potwierdzenie oznacza dopasowanie procentowych odległości strike’ów od ich własnych cen SPOT, nie potwierdzenie kierunku ceny." /></h2>
         <p>Poziomy do obserwacji, nie prognoza. OI i wolumen nie określają szansy odbicia ani przebicia. Dane mogą być opóźnione.</p>
       </div>
       <div className="analysis-meta">
@@ -53,19 +54,20 @@ export function WallAnalysis({ groups, expiration, updated, source, loading, err
     {!loading && groups.length === 0 && !error && <p className="analysis-empty">Brak danych do analizy walli.</p>}
     {!loading && groups.map((group) => <div className="analysis-group" key={group.symbol}>
       <div className="analysis-group-heading">
-        <h3>{group.symbol}</h3>
-        <span>SPOT · {display(group.spot)}</span>
+        <h3>{group.symbol}{group.symbol !== group.priceSymbol ? ` · ${group.priceSymbol}` : ''}</h3>
+        <span>SPOT {group.priceSymbol} · {display(group.spot)}</span>
       </div>
       {group.walls.length === 0 ? <p className="analysis-empty">{group.emptyMessage}</p> : <div className="analysis-grid">
         {group.walls.map((wall) => {
-          const { position, offsetPct, scenarios } = wallPosition(wall.contract.strike, group.spot);
+          const cashPrice = wallCashPrice(wall.contract.strike, wall.conversion);
+          const { position, offsetPct, scenarios } = wallPosition(cashPrice ?? NaN, group.spot);
           const hasOi = Number.isFinite(wall.contract.openInterest) && wall.contract.openInterest > 0;
           const metric = hasOi ? wall.contract.openInterest : wall.contract.volume;
           const metricAvailable = Number.isFinite(metric) && metric > 0;
           return <article className={`analysis-card analysis-${wall.side}`} key={`${wall.side}-${wall.label}-${wall.contract.strike}`}>
             <div className="analysis-card-heading">
               <span className={`analysis-side ${wall.side}-color`}>{wall.label} · {wall.side.toUpperCase()} WALL</span>
-              <strong>{display(wall.contract.strike)}</strong>
+              <strong>{cashPrice !== null && wall.conversion ? '≈ ' : ''}{display(cashPrice)} {group.priceSymbol}</strong>
             </div>
             <p className="analysis-distance">
               {offsetPct === null ? positionLabels[position] : `${offsetPct > 0 ? '+' : ''}${display(offsetPct)}% · ${positionLabels[position]}`}
@@ -77,11 +79,11 @@ export function WallAnalysis({ groups, expiration, updated, source, loading, err
             {wall.conversion && <p className="analysis-conversion">
               {wall.conversion.factor === null
                 ? `Przeliczenie na ${wall.conversion.symbol} niedostępne.`
-                : `≈ ${display(wall.contract.strike * wall.conversion.factor)} ${wall.conversion.symbol} · skala indeksu, nie cena CFD brokera.`}
+                : 'Przybliżenie w skali indeksu kasowego, nie cena CFD brokera.'}
             </p>}
             {scenarios.length > 0
               ? <ul className="analysis-scenarios">{scenarios.map((scenario) => <li key={scenario}>{scenario}</li>)}</ul>
-              : <p className="analysis-basis">Scenariusze względem ceny niedostępne: brak prawidłowego SPOT.</p>}
+              : <p className="analysis-basis">{cashPrice === null ? 'Scenariusze niedostępne: brak prawidłowego poziomu w skali kasowej.' : 'Scenariusze niedostępne: brak prawidłowego SPOT w skali kasowej.'}</p>}
           </article>;
         })}
       </div>}

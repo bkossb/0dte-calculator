@@ -4,6 +4,7 @@ import type { Chain, ChartLevel, WallConfluence } from './types';
 import { CONFLUENCE_TOLERANCE_PCT, instruments } from './config/instruments';
 import { compact, display, expirationLabel, heat, numberFormat, percentage, todayExpiration } from './lib/format';
 import { etfToCashFactor } from './lib/etfConversion';
+import { wallCashPrice } from './lib/wallAnalysis';
 import { helpText } from './lib/helpText';
 import { BROWSER_TIME_ZONE, isValidTimeZone, readTimeZonePreference, TIME_ZONE_STORAGE_KEY, timeZoneOptions } from './lib/timeZone';
 import { selectWallContracts, wallMetric } from './lib/walls';
@@ -197,12 +198,18 @@ export default function App() {
   const analysisGroups: AnalysisGroup[] = chain ? [
     {
       symbol: activeInstrument?.label ?? symbol,
-      spot: price ?? null,
+      priceSymbol: symbol === 'DIA' ? 'DJI' : symbol === 'GLD' ? 'XAUUSD' : activeInstrument?.label ?? symbol,
+      spot: symbol === 'DIA' ? confirmationPrice : symbol === 'GLD' ? null : price ?? null,
       emptyMessage: optionsUnavailableMessage || chain.optionsWarning || 'Brak wybranych walli dla dostępnych danych opcyjnych i ceny SPOT.',
       walls: wallConfluence.map((wall) => {
         const peerContracts = wall.side === 'put' ? chain.confirmation?.puts : chain.confirmation?.calls;
+        const peerCashPrice = wall.confirmation && etfSymbol && symbol !== 'DIA'
+          ? wallCashPrice(wall.confirmation.strike, { factor: etfFactor })
+          : null;
         const confirmation = wall.confirmation
-          ? `Dopasowanie ${chain.confirmation?.symbol}: ${display(wall.confirmation.strike)}.`
+          ? peerCashPrice === null
+            ? `Dopasowanie ${chain.confirmation?.symbol}; brak przeliczenia jego poziomu.`
+            : `Dopasowanie ${chain.confirmation?.symbol}: ≈ ${display(peerCashPrice)} ${activeInstrument?.label ?? symbol}.`
           : chain.confirmationSymbol
             ? confirmationPrice !== null && confirmationPrice > 0 && peerContracts?.length
               ? `Brak dopasowania ${chain.confirmationSymbol}.`
@@ -213,13 +220,16 @@ export default function App() {
           side: wall.side,
           contract: wall.contract,
           confirmation,
-          conversion: symbol === 'DIA' ? { symbol: cashSymbol ?? '^DJI', factor: etfFactor } : null,
+          conversion: symbol === 'DIA'
+            ? { symbol: 'DJI', factor: etfFactor }
+            : symbol === 'GLD' ? { symbol: 'XAUUSD', factor: null } : null,
         };
       }),
     },
     ...(etfSymbol && symbol !== 'DIA' ? [{
       symbol: etfSymbol,
-      spot: confirmationPrice,
+      priceSymbol: activeInstrument?.label ?? symbol,
+      spot: price ?? null,
       emptyMessage: chain.confirmationWarning || `Brak wybranych walli ${etfSymbol} dla dostępnych danych opcyjnych i ceny SPOT.`,
       walls: convertedEtfWalls.map((wall) => {
         const match = wallConfluence.find((primary) =>
@@ -227,7 +237,7 @@ export default function App() {
         return {
           ...wall,
           confirmation: match ? `Dopasowanie ${activeInstrument?.label ?? symbol}: ${display(match.contract.strike)}.` : `Brak dopasowania do wybranego walla ${activeInstrument?.label ?? symbol}.`,
-          conversion: { symbol: cashSymbol ?? symbol, factor: etfFactor },
+          conversion: { symbol: activeInstrument?.label ?? symbol, factor: etfFactor },
         };
       }),
     }] : []),
