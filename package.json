@@ -10,12 +10,13 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
-    "vite": "latest",
-    "typescript": "latest",
+    "lightweight-charts": "^4.2.3",
+    "lucide-react": "^0.468.0",
     "react": "latest",
     "react-dom": "latest",
-    "lucide-react": "^0.468.0",
-    "lightweight-charts": "^4.2.3"
+    "typescript": "latest",
+    "vite": "latest",
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "@types/react": "latest",

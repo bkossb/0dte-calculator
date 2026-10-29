@@ -1,3 +1,5 @@
+import WebSocket from 'ws';
+
 const SYMBOL_PATTERN = /^[A-Z0-9.^=-]{1,15}$/;
 const CHART_RANGES = { '1d': '5m' };
 const INSTRUMENT_MARKETS = {
@@ -7,7 +9,7 @@ const INSTRUMENT_MARKETS = {
   '^SPX': { cfdSymbol: 'US500', futuresSymbol: 'ES=F', referenceSymbol: 'SPY', confirmationSymbol: 'SPY' },
   DIA: { cfdSymbol: 'US30', futuresSymbol: 'YM=F', referenceSymbol: 'DIA' },
   GLD: { cfdSymbol: 'XAUUSD', futuresSymbol: 'GC=F', referenceSymbol: 'GLD' },
-  '^GDAXI': { cfdSymbol: 'DE40', futuresSymbol: '^GDAXI', referenceSymbol: '^GDAXI', eurexProductId: 3734540, eurexContractType: 'weekly' },
+  '^GDAXI': { cfdSymbol: 'DE40', futuresSymbol: 'FDAX', referenceSymbol: '^GDAXI', eurexProductId: 3734540, eurexContractType: 'weekly', tvFuturesSymbol: 'EUREX:FDAX1!' },
 };
 const YAHOO_HEADERS = { 'User-Agent': 'Mozilla/5.0 (compatible; OptionsDesk/1.0)' };
 const EUREX_HEADERS = { 'User-Agent': 'Mozilla/5.0 (compatible; OptionsDesk/1.0)' };
@@ -72,6 +74,69 @@ async function fetchYahooOptions(url) {
   return upstream;
 }
 
+function tvFrame(method, params) {
+  const payload = JSON.stringify({ m: method, p: params });
+  return `~m~${payload.length}~m~${payload}`;
+}
+
+function fetchTradingViewBars(symbol, interval = '5', barCount = 800, timeoutMs = 8000) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket('wss://data.tradingview.com/socket.io/websocket', {
+      headers: { Origin: 'https://www.tradingview.com', 'User-Agent': YAHOO_HEADERS['User-Agent'] },
+    });
+    const session = `cs_${Math.random().toString(36).slice(2, 10)}`;
+    const bars = [];
+    const finish = (error) => {
+      clearTimeout(timeout);
+      try { ws.close(); } catch { /* ignore */ }
+      if (error) reject(error);
+      else resolve(bars);
+    };
+    const timeout = setTimeout(() => finish(bars.length ? null : new Error('TradingView timeout')), timeoutMs);
+    ws.on('open', () => {
+      ws.send(tvFrame('set_auth_token', ['unauthorized_user_token']));
+      ws.send(tvFrame('chart_create_session', [session, '']));
+      ws.send(tvFrame('resolve_symbol', [session, 'sym1', `={"symbol":"${symbol}","adjustment":"splits","session":"extended"}`]));
+      ws.send(tvFrame('create_series', [session, 's1', 's1', 'sym1', interval, barCount, '']));
+    });
+    ws.on('message', (data) => {
+      for (const part of String(data).split('~m~')) {
+        if (!part || /^\d+$/.test(part)) continue;
+        let message;
+        try { message = JSON.parse(part); } catch { continue; }
+        if (message.m === 'timescale_update') {
+          const series = message.p?.[1]?.s1?.s ?? [];
+          for (const bar of series) {
+            const [time, open, high, low, close] = bar.v ?? [];
+            if (Number.isFinite(time) && Number.isFinite(close)) bars.push({ time, open, high, low, close });
+          }
+        }
+        if (message.m === 'series_completed') finish(null);
+        if (message.m === 'critical_error' || message.m === 'symbol_error') finish(new Error(`TradingView: ${message.m}`));
+      }
+    });
+    ws.on('error', () => finish(new Error('TradingView connection failed')));
+  });
+}
+
+function previousSessionFromBars(bars, timeZone) {
+  const today = zonedDate(Date.now() / 1000, timeZone);
+  const byDay = new Map();
+  for (const bar of bars) {
+    const date = zonedDate(bar.time, timeZone);
+    if (!byDay.has(date)) byDay.set(date, []);
+    byDay.get(date).push(bar);
+  }
+  const previousDate = [...byDay.keys()].filter((date) => date < today).at(-1);
+  if (!previousDate) return null;
+  const dayBars = byDay.get(previousDate);
+  return {
+    date: previousDate,
+    high: Math.max(...dayBars.map((bar) => bar.high).filter(Number.isFinite)),
+    close: dayBars.at(-1)?.close ?? null,
+  };
+}
+
 function berlinCompactDate(date = new Date()) {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: EUREX_TIME_ZONE,
@@ -116,28 +181,21 @@ async function handleEurexChain(request, response, symbol, market, range) {
   const dailyUrl = new URL(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}`);
   dailyUrl.searchParams.set('range', '5d');
   dailyUrl.searchParams.set('interval', '1d');
-  const overnightUrl = new URL(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(market.futuresSymbol)}`);
-  const now = Math.floor(Date.now() / 1000);
-  overnightUrl.searchParams.set('period1', String(now - 24 * 60 * 60));
-  overnightUrl.searchParams.set('period2', String(now));
-  overnightUrl.searchParams.set('interval', '5m');
-  overnightUrl.searchParams.set('includePrePost', 'true');
   const overviewUrl = `https://www.eurex.com/api/v1/overallstatistics/${market.eurexProductId}?filtertype=overview`;
 
   try {
     const { cookie } = await getYahooSession();
     const requestHeaders = { ...YAHOO_HEADERS, Cookie: cookie };
-    const [overviewResponse, chartUpstream, dailyUpstream, overnightUpstream] = await Promise.all([
+    const [overviewResponse, chartUpstream, dailyUpstream, futuresBars] = await Promise.all([
       fetch(overviewUrl, { headers: EUREX_HEADERS }).catch(() => null),
       fetch(chartUrl, { headers: requestHeaders }).catch(() => null),
       fetch(dailyUrl, { headers: requestHeaders }).catch(() => null),
-      fetch(overnightUrl, { headers: requestHeaders }).catch(() => null),
+      market.tvFuturesSymbol ? fetchTradingViewBars(market.tvFuturesSymbol).catch(() => null) : null,
     ]);
-    const [overview, chartPayload, dailyPayload, overnightPayload] = await Promise.all([
+    const [overview, chartPayload, dailyPayload] = await Promise.all([
       overviewResponse?.ok ? overviewResponse.json().catch(() => null) : null,
       chartUpstream?.ok ? chartUpstream.json().catch(() => null) : null,
       dailyUpstream?.ok ? dailyUpstream.json().catch(() => null) : null,
-      overnightUpstream?.ok ? overnightUpstream.json().catch(() => null) : null,
     ]);
 
     const chartResult = chartPayload?.chart?.result?.[0];
@@ -182,10 +240,16 @@ async function handleEurexChain(request, response, symbol, market, range) {
     const timestamps = chartResult?.timestamp ?? [];
     const closes = chartResult?.indicators?.quote?.[0]?.close ?? [];
     const history = timestamps.flatMap((time, index) => Number.isFinite(closes[index]) ? [{ time, close: closes[index] }] : []);
-    const overnightResult = overnightPayload?.chart?.result?.[0];
-    const overnightTimestamps = overnightResult?.timestamp ?? [];
-    const overnightCloses = overnightResult?.indicators?.quote?.[0]?.close ?? [];
-    const overnightHistory = overnightTimestamps.flatMap((time, index) => Number.isFinite(overnightCloses[index]) ? [{ time, close: overnightCloses[index] }] : []);
+    const now = Math.floor(Date.now() / 1000);
+    const overnightHistory = (futuresBars ?? [])
+      .filter((bar) => bar.time >= now - 24 * 60 * 60)
+      .map((bar) => ({ time: bar.time, close: bar.close }));
+    const futuresPrevious = futuresBars?.length
+      ? previousSessionFromBars(futuresBars, EUREX_TIME_ZONE)
+      : null;
+    const futuresPreviousDayHigh = futuresPrevious?.high ?? selectedPreviousSession?.high ?? null;
+    const futuresPreviousDayClose = futuresPrevious?.close ?? selectedPreviousSession?.close ?? null;
+    const futuresPreviousDayDate = futuresPrevious?.date ?? selectedPreviousSession?.date ?? null;
 
     response.setHeader('Cache-Control', 'no-store');
     return response.status(200).json({
@@ -217,11 +281,11 @@ async function handleEurexChain(request, response, symbol, market, range) {
       previousDayDate: selectedPreviousSession?.date ?? null,
       referencePreviousDayHigh: selectedPreviousSession?.high ?? null,
       referencePreviousDayDate: selectedPreviousSession?.date ?? null,
-      futuresPreviousDayHigh: selectedPreviousSession?.high ?? null,
-      futuresPreviousDayClose: selectedPreviousSession?.close ?? null,
-      futuresPreviousDayDate: selectedPreviousSession?.date ?? null,
+      futuresPreviousDayHigh: futuresPreviousDayHigh,
+      futuresPreviousDayClose: futuresPreviousDayClose,
+      futuresPreviousDayDate: futuresPreviousDayDate,
       overnightHistory,
-      overnightError: overnightHistory.length ? null : 'DAX index history is unavailable.',
+      overnightError: overnightHistory.length ? null : 'FDAX futures history is unavailable.',
       fetchedAt: new Date().toISOString(),
     });
   } catch {
