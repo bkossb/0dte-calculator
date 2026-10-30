@@ -117,6 +117,10 @@ export default function App() {
     call: selectWallContracts(chain?.confirmation?.calls ?? [], confirmationPrice, 'above', wallTolerance),
     put: selectWallContracts(chain?.confirmation?.puts ?? [], confirmationPrice, 'below', wallTolerance),
   }), [chain?.confirmation, confirmationPrice, wallTolerance]);
+  const monthlyWalls = useMemo(() => ({
+    call: selectWallContracts(chain?.monthly?.calls ?? [], price ?? null, 'above', wallTolerance, wallLeaderThreshold, maxWalls, wallMinMetric),
+    put: selectWallContracts(chain?.monthly?.puts ?? [], price ?? null, 'below', wallTolerance, wallLeaderThreshold, maxWalls, wallMinMetric),
+  }), [chain?.monthly, price, wallTolerance, wallLeaderThreshold, maxWalls, wallMinMetric]);
   const wallStrikes = new Set([...walls.call, ...walls.put].map((wall) => wall.strike));
   const wallRows = strikes.filter((row) => wallStrikes.has(row.strike));
   const showNearestStrikes = wallRows.length === 0 && strikes.length > 0;
@@ -279,6 +283,8 @@ export default function App() {
     ...(chain?.previousDayHigh ? [{ price: chain.previousDayHigh, color: '#f3c969', title: 'PDH', kind: 'reference' as const }] : []),
     ...(chain?.previousDayClose ? [{ price: chain.previousDayClose, color: '#7aa2f7', title: 'PDC', kind: 'reference' as const }] : []),
     ...walls.call.map((wall, index) => ({ price: wall.strike, color: '#55c99b', title: `C${index + 1}`, kind: 'call' as const })),
+    ...monthlyWalls.put.map((wall, index) => ({ price: wall.strike, color: '#e08a8a', title: `M P${index + 1}`, kind: 'put' as const })),
+    ...monthlyWalls.call.map((wall, index) => ({ price: wall.strike, color: '#7fb8a4', title: `M C${index + 1}`, kind: 'call' as const })),
     ...(chain?.gex?.callWall ? [{ price: chain.gex.callWall.strike, color: '#27ae60', title: 'GEX C', kind: 'gex' as const }] : []),
     ...(symbol !== 'DIA' && etfFactor !== null ? convertedEtfWalls.map((wall) => ({
       price: wall.contract.strike * etfFactor,
@@ -286,7 +292,7 @@ export default function App() {
       title: `${etfSymbol} ${wall.label}`,
       kind: wall.side,
     })) : []),
-  ], [walls, price, chain?.previousDayHigh, chain?.previousDayClose, chain?.gex, symbol, etfFactor, etfSymbol, convertedEtfWalls]);
+  ], [walls, monthlyWalls, price, chain?.previousDayHigh, chain?.previousDayClose, chain?.gex, symbol, etfFactor, etfSymbol, convertedEtfWalls]);
   const confirmationChartPoints = useMemo(() => (chain?.confirmation?.history ?? []).map(({ time, close }) => ({ time, value: close })), [chain?.confirmation?.history]);
   const confirmationChartLevels = useMemo<ChartLevel[]>(() => {
     const hasChain = (chain?.confirmation?.calls?.length ?? 0) + (chain?.confirmation?.puts?.length ?? 0) > 0;
@@ -365,6 +371,16 @@ export default function App() {
   function explainChartLevel(level: ChartLevel) {
     if (level.kind === 'gex') {
       return `\n${gexDetails}${level.title === 'GEX C' ? `\n${gexWallDetails('call')}` : level.title === 'GEX P' ? `\n${gexWallDetails('put')}` : ''}`;
+    }
+    const monthlyMatch = /^M ([PC])(\d+)$/.exec(level.title);
+    if (monthlyMatch && chain?.monthly) {
+      const side = monthlyMatch[1] === 'P' ? 'put' : 'call';
+      const wall = (side === 'put' ? monthlyWalls.put : monthlyWalls.call)[Number(monthlyMatch[2]) - 1];
+      if (wall) {
+        const metric = side === 'put' ? putMetric : callMetric;
+        const metricName = Number.isFinite(wall.openInterest) && wall.openInterest > 0 ? 'OI' : 'wolumen';
+        return `\n\nMonthly ${side} ${display(wall.strike)}, wygaśnięcie ${expirationLabel(chain.monthly.expiration)}, ${metricName}: ${display(metric(wall), 0)}.`;
+      }
     }
     const etfWall = convertedEtfWalls.find((wall) => `${etfSymbol} ${wall.label}` === level.title);
     return etfWall ? `\n\n${explainEtfWall(etfWall)}` : '';
@@ -489,6 +505,27 @@ export default function App() {
           lineColor="#55c99b"
           legend={showGex ? [...chartLegend, ...gexLegend] : chartLegend}
         />
+        {chain?.monthly && <section className="levels-panel monthly-levels" aria-label="Nearest monthly option levels">
+          <div className="levels-heading">
+            <div>
+              <h2>Monthly levels <HelpTip label="Poziomy monthly" text={`Najbliższy miesięczny termin Eurex (${expirationLabel(chain.monthly.expiration)}), walle wybrane tak samo jak dzienne: pasmo ±${display(wallTolerance * 100, 0)}% wokół SPOT, próg ${Math.round(wallLeaderThreshold * 100)}% lidera.`} /></h2>
+              <span className="chain-caption">EUREX MONTHLY · {expirationLabel(chain.monthly.expiration)}</span>
+            </div>
+            <span className="expiry-badge">MONTHLY · {expirationLabel(chain.monthly.expiration)}</span>
+          </div>
+          <div className="levels-rows">
+            {[...monthlyWalls.put.map((wall, index) => ({ wall, side: 'put' as const, label: `M P${index + 1}` })),
+              ...monthlyWalls.call.map((wall, index) => ({ wall, side: 'call' as const, label: `M C${index + 1}` }))].map(({ wall, side, label }) => (
+              <div className={`level-row ${side}-level`} key={`monthly-${side}-${wall.strike}`}>
+                <span className="level-name">{label}</span>
+                <strong className="level-price">{currencySymbol}{display(wall.strike)}</strong>
+                <span className="level-distance">{display(price ? (wall.strike / price - 1) * 100 : 0)}%</span>
+                <span className="level-metric">{Number.isFinite(wall.openInterest) && wall.openInterest > 0 ? `OI ${compact(wall.openInterest)}` : `VOL ${compact(wall.volume)}`}</span>
+              </div>
+            ))}
+            {monthlyWalls.put.length + monthlyWalls.call.length === 0 && <p className="options-warning">Brak walli monthly w paśmie ±{display(wallTolerance * 100, 0)}% wokół SPOT.</p>}
+          </div>
+        </section>}
         {chain?.confirmation && chain.confirmation.symbol !== chain.referenceSymbol && confirmationChartPoints.length > 0 && <PriceChart
           title={instruments.find((instrument) => instrument.symbol === chain.confirmation?.symbol)?.label ?? chain.confirmation.symbol}
           source={`${chain.confirmation.symbol} · 5 MIN`}

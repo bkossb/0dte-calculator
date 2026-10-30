@@ -311,7 +311,8 @@ async function handleEurexChain(request, response, symbol, market, range) {
       ?? null;
 
     const todayCompact = berlinCompactDate();
-    const weeklyDates = (overview?.dataRows ?? [])
+    const overviewRows = overview?.dataRows ?? [];
+    const weeklyDates = overviewRows
       .filter((row) => row.contractType === 'W' || row.contractType === 'E')
       .map((row) => String(row.date))
       .sort();
@@ -326,11 +327,23 @@ async function handleEurexChain(request, response, symbol, market, range) {
     let puts = [];
     let optionsError = null;
     let optionsWarning = null;
+    let monthly = null;
     if (!selectedDate || !busdate) {
       optionsError = 'Eurex nie zwrócił tygodniowych terminów opcji DAX.';
     } else {
+      const monthlyDate = overviewRows
+        .filter((row) => row.contractType === 'E')
+        .map((row) => String(row.date))
+        .sort()
+        .find((date) => date > selectedDate) ?? null;
       const detailUrl = `https://www.eurex.com/api/v1/overallstatistics/${market.eurexProductId}?filtertype=detail&productdate=${selectedDate}&busdate=${busdate}&contracttype=${market.eurexContractType}`;
-      const detailResponse = await fetch(detailUrl, { headers: EUREX_HEADERS }).catch(() => null);
+      const monthlyUrl = monthlyDate
+        ? `https://www.eurex.com/api/v1/overallstatistics/${market.eurexProductId}?filtertype=detail&productdate=${monthlyDate}&busdate=${busdate}&contracttype=monthly`
+        : null;
+      const [detailResponse, monthlyResponse] = await Promise.all([
+        fetch(detailUrl, { headers: EUREX_HEADERS }).catch(() => null),
+        monthlyUrl ? fetch(monthlyUrl, { headers: EUREX_HEADERS }).catch(() => null) : null,
+      ]);
       const detail = detailResponse?.ok ? await detailResponse.json().catch(() => null) : null;
       if (!detail || (!(detail.dataRowsCall ?? []).length && !(detail.dataRowsPut ?? []).length)) {
         optionsError = `Brak opcji Eurex dla ${symbol} dziś ani w najbliższym terminie.`;
@@ -338,6 +351,15 @@ async function handleEurexChain(request, response, symbol, market, range) {
         calls = (detail.dataRowsCall ?? []).map((row) => eurexContract(row, selectedDate, 'call', price));
         puts = (detail.dataRowsPut ?? []).map((row) => eurexContract(row, selectedDate, 'put', price));
         if (isNearestExpiration) optionsWarning = `Brak opcji 0DTE dla ${symbol}; pokazuję najbliższy termin.`;
+      }
+      const monthlyDetail = monthlyResponse?.ok ? await monthlyResponse.json().catch(() => null) : null;
+      if (monthlyDate && monthlyDetail && ((monthlyDetail.dataRowsCall ?? []).length || (monthlyDetail.dataRowsPut ?? []).length)) {
+        monthly = {
+          date: monthlyDate,
+          expiration: compactDateToEpoch(monthlyDate),
+          calls: (monthlyDetail.dataRowsCall ?? []).map((row) => eurexContract(row, monthlyDate, 'call', price)),
+          puts: (monthlyDetail.dataRowsPut ?? []).map((row) => eurexContract(row, monthlyDate, 'put', price)),
+        };
       }
     }
 
@@ -381,6 +403,7 @@ async function handleEurexChain(request, response, symbol, market, range) {
       isNearestExpiration,
       calls,
       puts,
+      monthly,
       optionsError,
       optionsWarning,
       confirmation: null,

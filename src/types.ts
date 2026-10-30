@@ -38,6 +38,7 @@ export type Chain = {
   isNearestExpiration: boolean;
   calls: Contract[];
   puts: Contract[];
+  monthly: { date: string; expiration: number; calls: Contract[]; puts: Contract[] } | null;
   confirmationSymbol: string | null;
   confirmation: ConfirmationChain | null;
   confirmationWarning: string | null;
