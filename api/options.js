@@ -312,7 +312,7 @@ async function handleEurexChain(request, response, symbol, market, range) {
 
     const todayCompact = berlinCompactDate();
     const weeklyDates = (overview?.dataRows ?? [])
-      .filter((row) => row.contractType === 'W')
+      .filter((row) => row.contractType === 'W' || row.contractType === 'E')
       .map((row) => String(row.date))
       .sort();
     const selectedDate = weeklyDates.find((date) => date === todayCompact)

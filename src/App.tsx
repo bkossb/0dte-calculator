@@ -27,6 +27,9 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+  const [goldCfdHigh, setGoldCfdHigh] = useState(() => {
+    try { return window.localStorage.getItem('xauusd-previous-high') ?? ''; } catch { return ''; }
+  });
   const [showAllWalls, setShowAllWalls] = useState(false);
   const [showGex, setShowGex] = useState(false);
   const [browserTimeZone, setBrowserTimeZone] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
@@ -188,6 +191,9 @@ export default function App() {
   const cashHigh = symbol === 'DIA' ? chain?.confirmation?.previousDayHigh : chain?.previousDayHigh;
   const cashDate = symbol === 'DIA' ? chain?.confirmation?.previousDayDate : chain?.previousDayDate;
   const etfFactor = etfToCashFactor(etfHigh, etfDate, cashHigh, cashDate);
+  const goldFactor = symbol === 'GLD'
+    ? etfToCashFactor(chain?.previousDayHigh, chain?.previousDayDate, Number(goldCfdHigh.replace(',', '.')) || null, chain?.previousDayDate)
+    : null;
   const convertedEtfWalls = useMemo(() => {
     const etfWalls = symbol === 'DIA' ? walls : chain?.confirmation?.symbol === etfSymbol ? confirmationWalls : { call: [], put: [] };
     return [
@@ -200,7 +206,7 @@ export default function App() {
     : [];
   const specialStatus = !chain ? null
     : symbol === 'DIA' ? 'Poziomy specjalne niedostępne: brak łańcucha opcji DJI do porównania z DIA.'
-    : symbol === 'GLD' ? 'Poziomy specjalne niedostępne: brak przeliczenia GLD i opcyjnego poziomu XAUUSD.'
+    : symbol === 'GLD' ? 'Poziomy specjalne niedostępne: brak opcyjnego poziomu XAUUSD do porównania z GLD.'
     : !etfSymbol ? 'Poziomy specjalne niedostępne: brak porównywanego ETF.'
     : etfFactor === null ? 'Poziomy specjalne niedostępne: brak poprawnego przeliczenia ETF na indeks.'
     : primaryWalls.length === 0 || convertedEtfWalls.length === 0 ? 'Poziomy specjalne niedostępne: brak wybranych walli indeksu lub ETF do porównania.'
@@ -209,7 +215,7 @@ export default function App() {
     {
       symbol: activeInstrument?.label ?? symbol,
       priceSymbol: symbol === 'DIA' ? 'DJI' : symbol === 'GLD' ? 'XAUUSD' : activeInstrument?.label ?? symbol,
-      spot: symbol === 'DIA' ? confirmationPrice : symbol === 'GLD' ? null : price ?? null,
+      spot: symbol === 'DIA' ? confirmationPrice : symbol === 'GLD' ? (price && goldFactor ? price * goldFactor : null) : price ?? null,
       emptyMessage: optionsUnavailableMessage || chain.optionsWarning || 'Brak wybranych walli dla dostępnych danych opcyjnych i ceny SPOT.',
       walls: wallConfluence.map((wall) => {
         const peerContracts = wall.side === 'put' ? chain.confirmation?.puts : chain.confirmation?.calls;
@@ -232,7 +238,7 @@ export default function App() {
           confirmation,
           conversion: symbol === 'DIA'
             ? { symbol: 'DJI', factor: etfFactor }
-            : symbol === 'GLD' ? { symbol: 'XAUUSD', factor: null } : null,
+            : symbol === 'GLD' ? { symbol: 'XAUUSD', factor: goldFactor } : null,
           specialMatches: etfSymbol ? specialMatches.filter((match) => match.side === wall.side && match.cashLabel === wall.label)
             .map((match) => ({ symbol: etfSymbol, label: match.etfLabel, price: match.etfPrice, approximate: true, differencePct: match.differencePct })) : [],
         };
@@ -566,6 +572,46 @@ export default function App() {
             </tbody>
           </table>
           {!loading && !error && etfFactor === null && <p className="options-warning conversion-notice">Conversion unavailable: both previous highs must be positive and from the same session.</p>}
+        </div>
+      </section>}
+
+      {symbol === 'GLD' && <section className="cfd-panel" aria-label="GLD to XAUUSD conversion">
+        <div className="cfd-heading">
+          <div><h2>GLD walls in XAUUSD units</h2><span className="chain-caption">PREVIOUS SESSION HIGH · XAUUSD CFD HIGH FROM YOUR BROKER</span></div>
+          <span className="expiry-badge">GLD · {chain?.isNearestExpiration ? 'NEAREST' : '0DTE'}</span>
+        </div>
+        <div className="cfd-inputs">
+          <div className="reference-high">
+            <span className="metric-label">GLD · PREVIOUS HIGH</span>
+            <strong>{display(chain?.previousDayHigh)}</strong>
+            <span>{chain?.previousDayDate ?? 'Waiting for daily data'}</span>
+          </div>
+          <div className="reference-high">
+            <span className="metric-label">XAUUSD · PREVIOUS HIGH</span>
+            <input
+              inputMode="decimal"
+              value={goldCfdHigh}
+              placeholder="e.g. 4082.66"
+              onChange={(event) => {
+                setGoldCfdHigh(event.target.value);
+                try { window.localStorage.setItem('xauusd-previous-high', event.target.value); } catch { /* storage unavailable */ }
+              }}
+            />
+          </div>
+          <div className="conversion-steps"><span>XAUUSD / GLD: <b>{display(goldFactor, 5)}</b></span></div>
+          <p className="conversion-formula">XAUUSD level = GLD strike × (XAUUSD previous high ÷ GLD previous high). Update the XAUUSD high daily.</p>
+        </div>
+        <div className="conversion-table-wrap">
+          <table className="conversion-table">
+            <thead><tr><th>LEVEL</th><th>GLD STRIKE</th><th>XAUUSD LEVEL</th></tr></thead>
+            <tbody>
+              {wallConfluence.length ? wallConfluence.map((wall) => <tr key={wall.label}>
+                <td className={wall.side === 'put' ? 'put-conversion' : 'call-conversion'}>{wall.label}</td>
+                <td>{display(wall.contract.strike)}</td>
+                <td className="converted-level">{goldFactor === null ? '—' : display(wall.contract.strike * goldFactor)}</td>
+              </tr>) : <tr><td className="conversion-empty" colSpan={3}>{loading ? 'Loading GLD walls.' : 'No GLD walls available.'}</td></tr>}
+            </tbody>
+          </table>
         </div>
       </section>}
 
